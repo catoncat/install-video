@@ -23,7 +23,7 @@ API 细节见 [reference.md](reference.md)，完整示例见 `examples/kpx2/`（
    - Blender 装在非默认位置时，设置环境变量 `BLENDER=<blender 可执行文件路径>`。
 2. 看到最后一行 `... | ok` 才算环境装好。输出里列出的字体就是视频字幕会用的中英文字体，缺中文字体时要提醒用户。
 3. 先跑一遍示例验证：`video make <skill>/examples/kpx2 draft 05a`，几十秒后会生成 `examples/kpx2/out/video.mp4`。
-4. 提前告诉用户需要多少资源：磁盘约 2 GB；1080p 成片每分钟视频大约渲染 10 到 30 分钟，取决于电脑性能。
+4. 提前告诉用户需要多少资源：磁盘约 2 GB；1080p 成片每分钟视频大约要渲染 20 到 60 分钟，主要看显卡。预览档大约是成片的一半。第一次渲染还要编译着色器，会更慢一些。
 
 可选：要在用户打开的 Blender 里实时搭建和查看，可以装 Blender MCP（`uvx blender-mcp` 加配套插件），用法见 reference.md。不装也能完整出片，自查靠 review 拼图。
 

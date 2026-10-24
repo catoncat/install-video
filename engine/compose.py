@@ -91,9 +91,9 @@ def review(out, tl, frames, per=6, tw=640):
             ImageDraw.Draw(im).text((8, im.size[1] - 26), f"{s['id']}  f{n}  {(n - s['start']) / tl['fps']:.1f}s",
                                     fill=(255, 0, 80), font=lab)
             tiles.append(im)
-        th = tiles[0].size[1]
-        sheet = Image.new("RGB", (tw * 3, th * ((len(tiles) + 2) // 3)), "black")
+        tw2, th = tiles[0].size        # 实际缩略图尺寸（小于 tw 时不留黑边）
+        sheet = Image.new("RGB", (tw2 * 3, th * ((len(tiles) + 2) // 3)), "black")
         for i, t in enumerate(tiles):
-            sheet.paste(t, ((i % 3) * tw, (i // 3) * th))
+            sheet.paste(t, ((i % 3) * tw2, (i // 3) * th))
         sheet.save(os.path.join(rdir, f"{s['id']}.jpg"), quality=85)
     print(f"review: {rdir}")

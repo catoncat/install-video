@@ -70,6 +70,7 @@ def materials():
     M["led"] = mat("led", (1.0, 0.97, 0.92), 0.0, 0.3, emission=4.0)
     M["guide"] = mat("guide_line", (1.0, 0.45, 0.05), 0.0, 0.5, emission=3.0)
     M["pack"] = mat("pack_wrap", (0.72, 0.74, 0.76), 0.0, 0.6)
+    M["sealant"] = mat("sealant", (0.88, 0.88, 0.86), 0.0, 0.3)   # 浅色硅酮胶，和灰色屋面拉开
 
 
 # ---------------- 部件 ----------------
@@ -332,6 +333,22 @@ def services():
         box(name + "_conduit", (0.02, 0.012, h) if a == "Y" else (0.012, 0.02, h),
             (c[0], c[1], c[2] + 0.05 + h / 2), M["elec"], st)
 
+def sealant():
+    """顶框四边接缝防水胶：屋面板与顶梁内沿的交缝。原点在每条边的起点，沿 X/Y 伸展，方便做"挤胶"动画"""
+    st = "08b_sealant"
+    r = 0.02
+    ix, iy, z = L / 2 - BEAM_F - r, W / 2 - BEAM_F - r, H - 0.04 + r   # 放在屋面板与梁内沿的阴角里，不被翼缘盖住
+    for name, start, axis, length in (("seal_front", (-ix, -iy, z), "X", 2 * ix), ("seal_right", (ix, -iy, z), "Y", 2 * iy),
+                                      ("seal_rear", (ix, iy, z), "X", -2 * ix), ("seal_left", (-ix, iy, z), "Y", -2 * iy)):
+        bm = bmesh.new()
+        bmesh.ops.create_cone(bm, cap_ends=True, segments=12, radius1=r, radius2=r, depth=abs(length))
+        for v in bm.verts:   # 圆柱沿 Z → 沿 axis，起点在原点
+            s = v.co.z + abs(length) / 2
+            s = s if length > 0 else -s
+            v.co = Vector((s, v.co.x, v.co.y)) if axis == "X" else Vector((v.co.x, s, v.co.y))
+        ob = obj(name, bm, M["sealant"], st, grow_axis=axis)
+        ob.location = start
+
 def guides():
     """说明用辅助物（默认隐藏，由分镜调出）：对角线"""
     st = "90_guides"
@@ -351,4 +368,4 @@ def bundle():
 def build():
     materials()
     ground(); foundation(); floor_frame(); floor_deck(); posts(); roof_frame()
-    walls(); trim(); fasteners(); services(); guides(); bundle()
+    walls(); trim(); sealant(); fasteners(); services(); guides(); bundle()

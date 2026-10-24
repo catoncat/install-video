@@ -79,6 +79,14 @@ SHOTS = [
          notes=[note(0.4, 5.6, "货包吊放到基础上，吊走顶框，取出夹层部件", "Set the bundle on the piers, lift off the roof frame, unpack the parts"),
                 note(6.3, 3.5, "底框留在原位，调平并复核两条对角线相等", "Level the floor frame and check both diagonals are equal")]),
 
+    shot("03b_floor_beams", 6, title=("到货就位", "Set down and unpack"), step=2,
+         hide=["@03_floor_deck"],
+         cam=cam((0, 0, 0.1), (-20, -8), 52, 8.5),
+         do=[highlight("floor_beam_*", 0.3, 1.6), highlight("floor_joist_*", 1.6, 4.0)],
+         callouts=[callout("floor_beam_front", 0.5, 2.0, "底框主梁 160 mm", "Floor main beam 160 mm", "down"),
+                   callout("floor_joist_4", 2.0, 3.8, "分配梁 方管 100×50 ×9", "Floor joists 100×50 tube ×9", "up")],
+         notes=[note(0.4, 5.4, "透视：地板下是主梁 + 9 根分配梁", "X-ray: main beams + 9 joists under the floor")]),
+
     shot("05a_post", 6, title=("安装角柱", "Install corner posts"), step=3,
          cam=cam("floor_corner_00", (-50, -40), 24, (1.25, 1.05), lens=40),
          do=[drop(["post_00", "downpipe_00"], 0.5, 2.0, h=0.9), screw("bolt_00_bot_*", 3.0, stagger=0.2)],
@@ -88,8 +96,20 @@ SHOTS = [
 
     shot("05b_posts", 6, title=("安装角柱", "Install corner posts"), step=3,
          cam=cam(CENTER, (-42, -30), 26, 11),
-         do=[drop(OTHER_POSTS, 1.5, 1.8, h=1.5, stagger=0.15), drop(OTHER_PIPES, 1.5, 1.8, h=1.5, stagger=0.15, hl=False), screw(OTHER_BOTS, 3.6, stagger=0.03)],
-         callouts=[callout("post_10", 4.0, 2.0, "角柱 210 × 150", "Corner post 210 × 150", "right")]),
+         do=[drop([f"post_{k}", f"downpipe_{k}"], 0.4 + i * 0.8, 1.2, h=1.5) for i, k in enumerate(("10", "11", "01"))] +
+            [screw(OTHER_BOTS, 3.4, stagger=0.03), highlight("post_*", 4.4, 1.2)],
+         callouts=[callout(f"post_{k}", 0.2 + i * 0.8, 5.6 - i * 0.8, str(i + 1), "", "up", anchor="top")
+                   for i, k in enumerate(("00", "10", "11", "01"))],
+         notes=[note(3.0, 2.9, "4 根角柱 210 × 150，逐根就位", "4 corner posts 210 × 150, set one by one")]),
+
+    shot("06a0_roof_beams", 6, title=("吊装顶框", "Lift the roof frame on"), step=4,
+         hide=["roof_sheet", "roof_insulation"],
+         cam=cam((0, 0, m.H + 1.8), (-25, -12), 40, 9.5),
+         do=[move("@05_roof_frame", 0, 0.1, frm=(0, 0, 1.8), to=(0, 0, 1.8), hl=False),
+             highlight("roof_beam_*", 0.4, 1.6), highlight("roof_purlin_*", 1.8, 3.8)],
+         callouts=[callout("roof_beam_front", 0.6, 2.0, "顶框主梁 180 mm", "Roof main beam 180 mm", "down"),
+                   callout("roof_purlin_3", 2.2, 3.6, "分配梁 C80×40 ×6", "Roof purlins C80×40 ×6", "up")],
+         notes=[note(0.4, 5.4, "透视：屋面板下是主梁 + 6 根分配梁", "X-ray: main beams + 6 purlins under the roof sheet")]),
 
     shot("06a_roof", 6, title=("吊装顶框", "Lift the roof frame on"), step=4,
          cam=cam(CENTER, -30, 26, 11.5),
@@ -119,6 +139,17 @@ SHOTS = [
          do=[move("post_wrap_*", 0.4, 1.2, out=0.5, stagger=0.2), drop("roof_wrap", 1.6, 1.4, h=0.8),
              appear("skirting", 3.0, hl=2.0)],
          notes=[note(3.2, 6.6, "装包柱件、顶部包边和踢脚线，接缝打胶密封", "Fit post and roof flashings and skirting; seal all joints")]),
+
+    shot("09b_seal", 5, title=("收边密封", "Flashing and sealing"), step=7,
+         cam=cam((-m.L / 2 + 0.9, -m.W / 2 + 0.25, m.H), (-40, -30), 34, (1.5, 1.25), lens=40),
+         do=[grow("seal_front", 0.5, 4.0)],
+         callouts=[callout("seal_front", 1.2, 3.6, "防水密封胶", "Waterproof sealant", "up")],
+         notes=[note(0.4, 4.4, "顶框四边接缝打防水密封胶", "Seal all four roof edges with waterproof sealant")]),
+
+    shot("09c_seal_all", 5, title=("收边密封", "Flashing and sealing"), step=7,
+         cam=cam((0, 0, m.H), (-30, -15), 55, 8.5),
+         do=[grow(["seal_right", "seal_rear", "seal_left"], 0.3, 1.1, stagger=1.1), highlight("seal_*", 3.8, 1.0)],
+         notes=[note(0.3, 4.5, "四边全部打胶，不留缝隙", "All four edges sealed, no gaps")]),
 
     shot("10a_drain", 5, title=("排水与电气", "Drainage and electrics"), step=8,
          hide=["post_*", "post_wrap_*", "roof_wrap"],

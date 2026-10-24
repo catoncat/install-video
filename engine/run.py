@@ -86,14 +86,14 @@ def main(argv):
         export_timeline(tl, os.path.join(out, "timeline.json"),
                         dict(music=getattr(shots, "MUSIC", {}), size=scene.output_size(args.quality)))
     sc = bpy.context.scene
-    if args.shots:
+    ranges = [(sc.frame_start, sc.frame_end)]
+    if args.shots:   # 只渲选中的 shot，不连带中间的
         want = args.shots.split(",")
-        sel = [(a, b) for s, a, b in tl.shots if any(s["id"].startswith(w) for w in want)]
-        if not sel:
+        ranges = [(a, b - 1) for s, a, b in tl.shots if any(s["id"].startswith(w) for w in want)]
+        if not ranges:
             raise ValueError(f"--shots {args.shots} 没匹配到任何 shot：{[s['id'] for s, _, _ in tl.shots]}")
-        sc.frame_start, sc.frame_end = min(a for a, _ in sel), max(b for _, b in sel) - 1
     sc.frame_step = args.step
-    print(f"timeline: {sc.frame_start}-{sc.frame_end} ({(sc.frame_end - sc.frame_start + 1) / anim.FPS:.1f}s)")
+    print(f"timeline: {', '.join(f'{a}-{b}' for a, b in ranges)} ({sum(b - a + 1 for a, b in ranges) / anim.FPS:.1f}s)")
     if args.no_render:
         return tl
     frames = os.path.join(out, "frames")
@@ -102,7 +102,9 @@ def main(argv):
     else:
         shutil.rmtree(frames, ignore_errors=True)
     sc.render.filepath = os.path.join(frames, "f_")
-    bpy.ops.render.render(animation=True)
+    for a, b in ranges:
+        sc.frame_start, sc.frame_end = a, b
+        bpy.ops.render.render(animation=True)
     return tl
 
 
