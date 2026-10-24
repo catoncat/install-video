@@ -168,3 +168,75 @@ def swatch(product=None, size=400):
     sheet.save(path, quality=88)
     print(f"swatch: {len(tiles)} 种材质 -> {path}")
     return path
+
+
+def check(product, frames=None, every=6):
+    """穿模检查：抽查帧（默认每 every 帧）里，不在静止位置的零件（正在动或处于折叠等姿态）和别的 stage 的零件
+       网格是否相交。设计上就贴在一起的，在对象上写 touch_ok=True（全部放过）或 touch_ok="post_*"（只放过匹配的）。"""
+    import fnmatch
+    from mathutils import Vector
+    from mathutils.bvhtree import BVHTree
+    from engine import run
+    geo, anim, scene, model, shots = run.load(product)
+    geo.reset()
+    model.build()
+    if hasattr(shots, "prepare"):
+        shots.prepare()
+    tl = anim.Timeline("16:9", None, product).build(shots.SHOTS)
+    sc = bpy.context.scene
+    frames = frames or list(range(sc.frame_start, sc.frame_end + 1, every))
+    objs = [o for o in anim.model_objects() if o.type == "MESH"]
+
+    def allowed(a, b):
+        for x, y in ((a, b), (b, a)):
+            t = x.get("touch_ok")
+            if t is True or (isinstance(t, str) and fnmatch.fnmatchcase(y.name, t)):
+                return True
+        return False
+
+    def aabb(o):
+        pts = [o.matrix_world @ Vector(c) for c in o.bound_box]
+        return Vector([min(p[i] for p in pts) for i in range(3)]), Vector([max(p[i] for p in pts) for i in range(3)])
+
+    hits = {}
+    dg = bpy.context.evaluated_depsgraph_get()
+    for fr in frames:
+        sc.frame_set(fr)
+        dg.update()
+        vis = [o for o in objs if not o.hide_render]
+        moving = [o for o in vis if (o.matrix_world.translation - Vector(o["rest"])).length > 1e-4
+                  or any(abs(a - b) > 1e-4 for a, b in zip(o.rotation_euler, o.get("rest_rot", (0, 0, 0))))]
+        boxes = {o: aabb(o) for o in vis}
+        trees = {}
+        for a in moving:
+            for b in vis:
+                if b is a or b.get("stage") == a.get("stage") or allowed(a, b):
+                    continue
+                key = tuple(sorted((a.name, b.name)))
+                (la, ha), (lb, hb) = boxes[a], boxes[b]
+                if any(ha[i] < lb[i] or hb[i] < la[i] for i in range(3)):
+                    continue
+                for o in (a, b):
+                    if o not in trees:
+                        me = o.evaluated_get(dg).data          # 世界坐标下建树，两棵树才能直接比
+                        trees[o] = BVHTree.FromPolygons([o.matrix_world @ v.co for v in me.vertices],
+                                                        [p.vertices[:] for p in me.polygons])
+                if trees[a].overlap(trees[b]):
+                    hits.setdefault(key, []).append(fr)
+    shot_of = lambda fr: next((s["id"] for s, a, b in tl.shots if a <= fr < b), "?")
+    if not hits:
+        print(f"check: {len(frames)} 帧，没有发现穿模")
+        return []
+    stage = {o.name: o.get("stage", "?") for o in objs}
+    groups = {}
+    for (a, b), frs in hits.items():
+        g = groups.setdefault(tuple(sorted((stage[a], stage[b]))), dict(pairs=[], frames=[]))
+        g["pairs"].append((a, b))
+        g["frames"] += frs
+    print(f"check: {len(frames)} 帧里发现 {len(hits)} 对零件相交，按 stage 归成 {len(groups)} 组（只查不在静止位置的零件）：")
+    for (sa, sb), g in sorted(groups.items(), key=lambda kv: min(kv[1]["frames"])):
+        f0, f1 = min(g["frames"]), max(g["frames"])
+        eg = "、".join(f"{a} × {b}" for a, b in g["pairs"][:2])
+        print(f"  - {sa} × {sb}：{len(g['pairs'])} 对，{shot_of(f0)}（帧 {f0}–{f1}）。例：{eg}")
+    print("  设计上本来就贴在一起的，给对象加 touch_ok=True 或 touch_ok=\"名字通配\" 放过")
+    return hits
