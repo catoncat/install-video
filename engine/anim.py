@@ -6,7 +6,7 @@
 不够用时，在 do 里放一个普通函数 fn(ctx)，引擎会在该 shot 里调用它（见 Ctx）。
 """
 import bpy, math, fnmatch, difflib
-from mathutils import Vector
+from mathutils import Vector, Matrix, Euler
 from . import geo
 
 FPS = 30
@@ -14,12 +14,14 @@ HL_IN, HL_OUT = 0.2, 0.5          # 高亮淡入 / 淡出秒数
 
 
 # ---------------- 分镜数据构造（只是返回 dict，方便书写） ----------------
-def shot(id, dur, title=None, cam=None, do=(), show=None, hide=(), notes=(), callouts=(), step=None, card=False):
+def shot(id, dur, title=None, cam=None, do=(), show=None, hide=(), notes=(), callouts=(), step=None, card=False,
+         card_pos="bottom", subtitle=None):
     """title=(中, 英)；show=该 shot 开头可见的选择器（不给则沿用上一个 shot 结束时的状态）；
-       hide=只在本 shot 内临时隐藏；step=左上角步骤编号；card=True 时标题居中大字显示（片头片尾）。
+       hide=只在本 shot 内临时隐藏；step=左上角步骤编号；card=True 时标题居中大字显示（片头片尾），
+       card_pos=top / center / bottom 决定卡片在画面里的位置，subtitle=(中, 英) 是卡片的第二行小字。
        cam=None 时沿用上一个 shot 结束时的机位。"""
     return dict(id=id, dur=dur, title=title, cam=cam, do=list(do), show=show, hide=list(hide),
-                notes=list(notes), callouts=list(callouts), step=step, card=card)
+                notes=list(notes), callouts=list(callouts), step=step, card=card, card_pos=card_pos, subtitle=subtitle)
 
 def cam(target, az, el, dist, lens=35, target_end=None):
     """相机围绕 target（选择器或 (x,y,z)）的球坐标。az/el 为度（az=0 在 -Y 正前方，逆时针为正），dist 为米。
@@ -42,6 +44,21 @@ def lift(sel, at, dur=1.5, h=1.2, **kw):
 
 def screw(sel, at, dur=1.0, dist=0.12, turns=3, stagger=0.08, **kw):
     return move(sel, at, dur, out=dist, spin=turns, stagger=stagger, **kw)
+
+def rotate(sel, at, dur, axis="Z", pivot=None, edge=None, frm=0.0, to=90.0, stagger=0.0, hl=None, exit=False):
+    """绕世界坐标里的一条轴转动（开门、翻板、铰链）。角度单位为度，从 静止姿态转 frm 度 过渡到 转 to 度。
+       pivot：轴经过的点，(x,y,z) 或选择器（取其静止包围盒）；不给就用 sel 自己的包围盒。
+       edge："-x" / "+x" / "-y" / "+y" / "-z" / "+z"，取包围盒那一侧的面中心作为轴心（门的铰链边）。
+       多个对象一起转时轴心只算一次，所以门扇和把手会作为一个整体转。"""
+    return dict(kind="rotate", sel=sel, at=at, dur=dur, axis=axis, pivot=pivot, edge=edge, frm=frm, to=to,
+                stagger=stagger, hl=(not exit) if hl is None else hl, exit=exit)
+
+def copies(sel, spots, at=0.0, until=None, drop=0.0, dur=1.2, stagger=0.0, name=None):
+    """把 sel 整体复制到 spots=[(x,y,z) 偏移, ...]（集合实例，几乎不占渲染时间）：拼箱、叠箱、货包。
+       at 秒出现（drop>0 时从上方 drop 米落下，用时 dur），until 秒消失（秒数相对本 shot 开头，可以超出本 shot；
+       不给就一直留到片尾）。stagger：每个副本依次延后。"""
+    return dict(kind="copies", sel=sel, spots=[tuple(s) for s in spots], at=at, until=until, drop=drop, dur=dur,
+                stagger=stagger, name=name)
 
 def grow(sel, at, dur=1.5, stagger=0.0, hl=True):
     """沿对象的 ["grow_axis"] 从 0 长到原长（打胶、走线、画线）。原点要在起点"""
@@ -86,54 +103,111 @@ def resolve(sel, allow_empty=False):
         out += [o for o in hit if o not in out]
     return out
 
-def bbox_center(objs, anchor="center"):
-    pts = [o.matrix_world @ Vector(c) for o in objs for c in o.bound_box]
-    lo = Vector([min(p[i] for p in pts) for i in range(3)])
-    hi = Vector([max(p[i] for p in pts) for i in range(3)])
+def rest_matrix(o):
+    """静止姿态的世界矩阵（建时间线时记下的位置和旋转），不受动画当前状态影响"""
+    if "rest" not in o:
+        return o.matrix_world
+    return Matrix.LocRotScale(Vector(o["rest"]), Euler(o.get("rest_rot", (0, 0, 0))), o.scale)
+
+def bbox(objs, rest=False):
+    pts = [(rest_matrix(o) if rest else o.matrix_world) @ Vector(c) for o in objs for c in o.bound_box]
+    return (Vector([min(p[i] for p in pts) for i in range(3)]), Vector([max(p[i] for p in pts) for i in range(3)]))
+
+def bbox_center(objs, anchor="center", rest=False):
+    lo, hi = bbox(objs, rest)
     c = (lo + hi) / 2
     if anchor != "center":
         c.z = lo.z + (hi.z - lo.z) * (0.92 if anchor == "top" else 0.08)
     return c
 
 def point(target):
+    """坐标原样返回；选择器取静止姿态的包围盒中心（和动画进行到哪无关）"""
     if isinstance(target, (tuple, list)) and len(target) == 3 and all(isinstance(v, (int, float)) for v in target):
         return Vector(target)
-    return bbox_center(resolve(target))
+    return bbox_center(resolve(target), rest=True)
 
 
 # ---------------- 关键帧 ----------------
 class Ctx:
-    """传给自定义函数的上下文：ctx.f(秒) 转帧号；ctx.resolve(sel)；ctx.vis(obj, 秒, True/False)"""
-    def __init__(self, start, timeline):
+    """传给自定义函数的上下文（秒数都相对本 shot 开头）：
+       ctx.f(秒) 转帧号；ctx.dur 本 shot 时长；ctx.resolve(sel) 取对象；
+       ctx.vis(obj, 秒, True/False) 显隐；ctx.key(obj, 秒, loc=, rot=, interp=) 打关键帧；
+       ctx.cut(objs, 秒) 在该时刻硬切（上一个关键帧之后保持不动）；ctx.only_in_shot(objs) 只在本 shot 里可见。"""
+    def __init__(self, start, timeline, dur=0.0):
         self.start = start
         self.t = timeline
+        self.dur = dur
         self.resolve = resolve
     def f(self, sec):
         return self.start + round(sec * FPS)
     def vis(self, ob, sec, on):
         self.t.vis_events.setdefault(ob, []).append((self.f(sec), on))
+    def key(self, ob, sec, loc=None, rot=None, interp=None):
+        """loc=(x,y,z) 世界坐标；rot=(x,y,z) 弧度；interp="LINEAR" / "CONSTANT" / None（默认缓动）"""
+        self.t._ensure_rest(ob)
+        fr = self.f(sec)
+        if loc is not None:
+            ob.location = loc
+            ob.keyframe_insert("location", frame=fr)
+        if rot is not None:
+            ob.rotation_euler = rot
+            ob.keyframe_insert("rotation_euler", frame=fr)
+        if interp:
+            self.t._mark(ob, fr, interp)
+    def cut(self, objs, sec=0.0):
+        for ob in ([objs] if isinstance(objs, bpy.types.Object) else objs):
+            self.t.cuts.append((ob, self.f(sec)))
+    def only_in_shot(self, objs, frm=0.0, to=None):
+        """模型之外、自定义函数里新建的对象（空物体、实例）只在 [frm, to] 秒可见，片头起默认隐藏"""
+        for ob in ([objs] if isinstance(objs, bpy.types.Object) else objs):
+            self.t.vis_events.setdefault(ob, []).extend(
+                [(1, False), (self.f(frm), True), (self.f(self.dur if to is None else to), False)])
 
 
 class Timeline:
     def __init__(self):
         self.vis_events = {}       # obj -> [(frame, visible)]
-        self.hold = {}             # obj -> {frame}：这些关键帧之后保持不动，直到下一次 move
+        self.interp = {}           # obj -> {frame: "CONSTANT"/"LINEAR"}：CONSTANT 表示该关键帧之后保持不动
+        self.cuts = []             # [(obj, frame)]：该帧之前最后一个关键帧改成 CONSTANT（硬切）
         self.shots = []            # [(shot dict, start frame, end frame)]
+        self.warnings = []
+        self.n_copies = 0
+
+    def _mark(self, o, frame, mode):
+        self.interp.setdefault(o, {})[frame] = mode
+
+    def _ensure_rest(self, o):
+        """第一次打关键帧之前，先在第 1 帧记下静止姿态并保持，免得片头沿用后面某个关键帧的值"""
+        if "rest" not in o:
+            return
+        paths = {fc.data_path for fc in fcurves(o)}
+        for path, val in (("location", o["rest"]), ("rotation_euler", o.get("rest_rot", (0, 0, 0)))):
+            if path not in paths:
+                cur = tuple(getattr(o, path))
+                setattr(o, path, val)
+                o.keyframe_insert(path, frame=1)
+                setattr(o, path, cur)
+        self._mark(o, 1, "CONSTANT")
 
     def build(self, shots):
         objs = model_objects()
         for ob in scene_camera():
             ob.animation_data_clear()
         bpy.data.objects["CAM"].data.animation_data_clear()
+        for ob in [o for o in bpy.data.objects if o.get("copies")]:      # 上次建的副本
+            bpy.data.objects.remove(ob, do_unlink=True)
+        for c in [c for c in bpy.data.collections if c.name.startswith("COPIES_")]:
+            bpy.data.collections.remove(c)
         for o in objs:
             o["rest"] = list(o.location)
+            o["rest_rot"] = list(o.rotation_euler)
             o["hl"] = 0.0
             o.animation_data_clear()
         state = set()
         frame = 1
         for s in shots:
             start, end = frame, frame + round(s["dur"] * FPS)
-            ctx = Ctx(start, self)
+            ctx = Ctx(start, self, s["dur"])
             ctx.moved = set()
             if s["show"] is not None:
                 state = set(resolve(s["show"]))
@@ -144,12 +218,19 @@ class Timeline:
                 if callable(a):
                     a(ctx)
                     continue
+                if a["kind"] == "copies":
+                    self._copies(ctx, a)
+                    continue
                 targets = resolve(a["sel"])
+                pivot = self._pivot(a, targets) if a["kind"] == "rotate" else None
                 for i, o in enumerate(targets):
                     at = a["at"] + i * a.get("stagger", 0.0)
                     entering = o not in state and o not in tmp_hidden   # hide 优先于入场
-                    if a["kind"] == "move":
-                        self._move(ctx, o, a, at)
+                    if a["kind"] in ("move", "rotate"):
+                        if a["kind"] == "move":
+                            self._move(ctx, o, a, at)
+                        else:
+                            self._rotate(ctx, o, a, at, pivot)
                         if entering:
                             ctx.vis(o, at, True)
                         if a["exit"]:
@@ -183,12 +264,19 @@ class Timeline:
             self.shots.append((s, start, end))
             frame = end
         self._write_vis()
-        for o, frames in self.hold.items():
+        paths = ("location", "rotation_euler", "scale")
+        for o, marks in self.interp.items():
             for fc in fcurves(o):
-                if fc.data_path in ("location", "rotation_euler"):
+                if fc.data_path in paths:
                     for k in fc.keyframe_points:
-                        if round(k.co.x) in frames:
-                            k.interpolation = "CONSTANT"
+                        if round(k.co.x) in marks:
+                            k.interpolation = marks[round(k.co.x)]
+        for o, fr in self.cuts:
+            for fc in fcurves(o):
+                if fc.data_path in paths:
+                    prev = [k for k in fc.keyframe_points if k.co.x < fr - 0.5]
+                    if prev:
+                        max(prev, key=lambda k: k.co.x).interpolation = "CONSTANT"
         bpy.context.scene.frame_start = 1
         bpy.context.scene.frame_end = frame - 1
         return self
@@ -200,16 +288,12 @@ class Timeline:
             frm = frm + Vector(o["out"]) * a["out"]
         f0, f1 = ctx.f(at), ctx.f(at + a["dur"])
         keys = [(f0, frm), (f1, to)]
-        hold = self.hold.setdefault(o, set())
-        if not any(fc.data_path == "location" for fc in fcurves(o)):   # 第一次动之前停在静止位置
-            o.location = rest
-            o.keyframe_insert("location", frame=1)
-            hold.add(1)
+        self._ensure_rest(o)
         if o not in ctx.moved and f0 > ctx.start:     # 本 shot 第一次动：从 shot 开头就摆在起始位置
             keys.insert(0, (ctx.start, frm))
-            hold.add(ctx.start)
+            self._mark(o, ctx.start, "CONSTANT")
         ctx.moved.add(o)
-        hold.add(f1)
+        self._mark(o, f1, "CONSTANT")
         for fr, off in keys:
             o.location = rest + off
             o.keyframe_insert("location", frame=fr)
@@ -220,8 +304,74 @@ class Timeline:
                 o.keyframe_insert("rotation_euler", index=idx, frame=fr)
         o.location = rest
 
+    def _pivot(self, a, targets):
+        pv = a["pivot"]
+        if pv is not None and not isinstance(pv, str) and all(isinstance(v, (int, float)) for v in pv):
+            return Vector(pv)                                   # 直接给坐标
+        lo, hi = bbox(resolve(pv) if pv is not None else targets, rest=True)
+        p = (lo + hi) / 2
+        if a["edge"]:                                           # 取包围盒某一侧的面中心
+            i = "xyz".index(a["edge"][1])
+            p[i] = lo[i] if a["edge"][0] == "-" else hi[i]
+        return p
+
+    def _rotate(self, ctx, o, a, at, pivot):
+        """绕 pivot 转动：逐 2 帧打位置 + 旋转关键帧（线性），结束后保持"""
+        L0, E0 = Vector(o["rest"]), Euler(o.get("rest_rot", (0, 0, 0)))
+        def pose(deg, prev):
+            R = Matrix.Rotation(math.radians(deg), 3, a["axis"])
+            eul = (R @ E0.to_matrix()).to_euler("XYZ", prev) if prev else (R @ E0.to_matrix()).to_euler("XYZ")
+            return pivot + R @ (L0 - pivot), eul
+        f0, f1 = ctx.f(at), ctx.f(at + a["dur"])
+        self._ensure_rest(o)
+        frames = list(range(f0, f1, 2)) + [f1]
+        if o not in ctx.moved and f0 > ctx.start:
+            frames.insert(0, ctx.start)
+        ctx.moved.add(o)
+        prev = None
+        for fr in frames:
+            u = 0.0 if fr <= f0 else (fr - f0) / max(1, f1 - f0)
+            e = u * u * (3 - 2 * u)
+            loc, prev = pose(a["frm"] + (a["to"] - a["frm"]) * e, prev)
+            o.location, o.rotation_euler = loc, prev
+            o.keyframe_insert("location", frame=fr)
+            o.keyframe_insert("rotation_euler", frame=fr)
+            self._mark(o, fr, "LINEAR")
+        if frames[0] < f0:
+            self._mark(o, frames[0], "CONSTANT")
+        self._mark(o, f1, "CONSTANT")
+        o.location, o.rotation_euler = L0, E0
+
+    def _copies(self, ctx, a):
+        """集合实例：每个副本一个空物体，片头起隐藏，at 出现，until 消失"""
+        self.n_copies += 1
+        name = a["name"] or f"copies{self.n_copies}"
+        unit = bpy.data.collections.new("COPIES_" + name)      # 不链接进场景，只给实例引用
+        for o in resolve(a["sel"]):
+            unit.objects.link(o)
+        for k, spot in enumerate(a["spots"]):
+            e = bpy.data.objects.new(f"{name}_{k}", None)
+            bpy.context.scene.collection.objects.link(e)
+            e["copies"] = True
+            e.instance_type, e.instance_collection = "COLLECTION", unit
+            at = a["at"] + k * a["stagger"]
+            for sec, dz in (((at, a["drop"]), (at + a["dur"], 0.0)) if a["drop"] else ((at, 0.0),)):
+                e.location = Vector(spot) + Vector((0, 0, dz))
+                e.keyframe_insert("location", frame=ctx.f(sec))
+            self._mark(e, ctx.f(at + (a["dur"] if a["drop"] else 0)), "CONSTANT")
+            ev = [(1, False), (ctx.f(at), True)]
+            if a["until"] is not None:
+                ev.append((ctx.f(a["until"]), False))
+            self.vis_events.setdefault(e, []).extend(ev)
+
     def _hl(self, ctx, o, at, dur):
-        for sec, v in ((at - HL_IN, 0.0), (at, 1.0), (at + dur, 1.0), (at + dur + HL_OUT, 0.0)):
+        """高亮最晚在本 shot 结束时淡完，不拖进下一个镜头"""
+        end = ctx.dur
+        if at + dur > end + 1e-6:
+            self.warnings.append(f"高亮超出 shot 结尾，已截断：{o.name}（{at:.1f}+{dur:.1f}s > {end:.1f}s）")
+        t_end = min(at + dur + HL_OUT, end)
+        t_hold = max(at, min(at + dur, t_end - 0.1))
+        for sec, v in ((at - HL_IN, 0.0), (at, 1.0), (t_hold, 1.0), (t_end, 0.0)):
             o["hl"] = v
             o.keyframe_insert('["hl"]', frame=max(1, ctx.f(sec)))
         o["hl"] = 0.0

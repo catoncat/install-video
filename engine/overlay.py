@@ -2,6 +2,7 @@
 由 cli.py 调用：overlay.main(<产品目录>/out)。依赖 Pillow。"""
 import os, json, shutil
 from PIL import Image, ImageDraw, ImageFont
+from .log import say
 
 ACCENT = (255, 108, 13)
 INK, INK2 = (28, 30, 34), (80, 86, 94)
@@ -74,13 +75,13 @@ class Painter:
 
 
 # 各类文字的（主行, 副行）字号，按 1920×1080 设计；产品可在 shots.py 里用 TEXT = dict(card=1.5) 按类型放大
-SIZE = {"step": (40, 22), "card": (64, 30), "note": (34, 23), "callout": (28, 20)}
-MAXW = {"step": 1300, "card": 1680, "note": 1640, "callout": 720}     # 每类文字一行的最大宽度
+SIZE = {"step": (40, 22), "card": (64, 30), "card_sub": (36, 24), "note": (34, 23), "callout": (28, 20)}
+MAXW = {"step": 1300, "card": 1680, "card_sub": 1680, "note": 1640, "callout": 720}     # 每类文字一行的最大宽度
 SCALE = {}
 FITTED = set()     # 被自动折行或缩小过的文字，最后统一提示
 
 def sz(kind):
-    k = SCALE.get(kind, 1.0)
+    k = SCALE.get(kind, SCALE.get("card", 1.0) if kind == "card_sub" else 1.0)   # 卡片副标题跟着 card 一起放大
     return SIZE[kind][0] * k, SIZE[kind][1] * k
 
 def wrap(P, text, kind, px, maxw):
@@ -116,11 +117,14 @@ def block(P, zh, en, kind, zk="zh_b", ek="en", zc=INK, ec=INK2):
     zl, zp = fit(P, zh, zk, zp, MAXW[kind])
     el, ep = fit(P, en, ek, ep, MAXW[kind])
     rows = [(t, zk, zp, zc, zp * 1.25) for t in zl] + [(t, ek, ep, ec, ep * 1.2) for t in el]
-    w = max([P.text_size(t, k, px)[0] for t, k, px, _, _ in rows] or [0])
+    w = max([P.text_size(t, k, px)[0] for t, k, px, _, _ in rows if t] or [0])
     return rows, w, sum(r[4] for r in rows)
 
 def draw_rows(P, rows, x, y, a, center=None):
     for t, k, px, c, lh in rows:
+        if not t:                  # 空行只占高度（卡片主副标题之间的间距）
+            y += lh
+            continue
         tx = center - P.text_size(t, k, px)[0] / 2 if center is not None else x
         P.text((tx, y), t, k, px, c, a)
         y += lh
@@ -140,7 +144,12 @@ def draw_step(P, it, a):
 
 def draw_card(P, it, a):
     rows, w, h = block(P, it["zh"], it["en"], "card", zc=(255, 255, 255), ec=(225, 228, 232))
-    y = min(740, 1080 - 190 - h)          # 放大或折行后往上挪，给底部字幕留位置
+    if it.get("sub"):                      # 副标题：小一号，和主标题之间留一点空
+        srows, sw, sh = block(P, it["sub"][0], it["sub"][1], "card_sub", "zh", "en", (232, 235, 240), (200, 206, 214))
+        gap = sz("card_sub")[0] * 0.4
+        rows, w, h = rows + [("", "en", 1, (0, 0, 0), gap)] + srows, max(w, sw), h + gap + sh
+    pos = it.get("pos", "bottom")
+    y = 150 if pos == "top" else 540 - h / 2 if pos == "center" else min(740, 1080 - 190 - h)   # 底部时给字幕留位置
     P.rect((960 - w / 2 - 40, y - 28, 960 + w / 2 + 40, y + h + 30), 20, (18, 20, 24), 170 * a)
     draw_rows(P, rows, 0, y, a, center=960)
 
@@ -194,6 +203,60 @@ def merge_steps(items):
     return out
 
 
+def prepare(tl):
+    """应用字号设置和语言模式，合并相邻的同一标题"""
+    SCALE.update(tl.get("text", {}))
+    if tl.get("lang") == "en":   # 纯英文：英文升为主行，用英文字体，不留空的第二行
+        ALIAS.update(zh="en", zh_b="en_b")
+        for it in tl["items"]:
+            it["zh"], it["en"] = it["en"], ""
+            if it.get("sub"):
+                it["sub"] = [it["sub"][1], ""]
+    return merge_steps(tl["items"])
+
+
+def text_report(out):
+    """按时间列出每一屏同时可见的全部文字：英文单词数、按当前字号算的宽度、是否被自动折行或缩小。
+       写到 out/text.md，返回超出 MAX_WORDS 的段数"""
+    import re
+    tl = json.load(open(os.path.join(out, "timeline.json"), encoding="utf-8"))
+    en_mode, fps, limit = tl.get("lang") == "en", tl["fps"], tl.get("max_words")
+    items = prepare(tl)
+    P = Painter(1920, 1080)
+    kinds = {"step": "step", "card": "card", "note": "note", "callout": "callout"}
+    cuts = sorted({it["frames"][0] for it in items} | {it["frames"][1] + 1 for it in items})
+    segs = []
+    for a, b in zip(cuts, cuts[1:]):
+        live = [it for it in items if it["frames"][0] <= a <= it["frames"][1]]
+        if live and segs and segs[-1][2] == live:
+            segs[-1][1] = b
+        elif live:
+            segs.append([a, b, live])
+    words = lambda t: len(re.findall(r"[A-Za-z]+(?:['’-][A-Za-z]+)*", t or ""))
+    lines, over = ["# 每屏文字", "", f"语言：{'纯英文' if en_mode else '中英双语'}；每屏英文单词上限：{limit or '未设置（shots.py 里写 MAX_WORDS = 8）'}", ""], 0
+    for a, b, live in segs:
+        n = 0
+        rows = []
+        for it in live:
+            texts = [(it["zh"], it["en"], kinds[it["type"]])] + ([(*it["sub"], "card_sub")] if it.get("sub") else [])
+            for zh, en, kind in texts:
+                FITTED.clear()
+                _, w, _ = block(P, zh, en, kind)
+                eng = zh if en_mode else en
+                n += words(eng)
+                flag = "（已自动折行或缩小）" if FITTED else ""
+                rows.append(f"  - {it['type']}: {zh}{' / ' + en if en else ''}  · {words(eng)} 词 · {w:.0f}px{flag}")
+        bad = limit and n > limit
+        over += bool(bad)
+        lines.append(f"**{(a - 1) / fps:.1f}–{(b - 1) / fps:.1f}s** · {live[0].get('shot', '')} · 英文 {n} 词{' ⚠ 超过上限' if bad else ''}")
+        lines += rows + [""]
+    path = os.path.join(out, "text.md")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+    say(f"text: {path}（{len(segs)} 屏{f'，{over} 屏超过 {limit} 个英文单词' if over else ''}）")
+    return over
+
+
 def main(out):
     tl = json.load(open(os.path.join(out, "timeline.json"), encoding="utf-8"))
     frames_dir, ov_dir = os.path.join(out, "frames"), os.path.join(out, "overlay")
@@ -201,12 +264,7 @@ def main(out):
     os.makedirs(ov_dir)
     files = sorted(f for f in os.listdir(frames_dir) if f.endswith(".png"))
     w, h = tl["size"]                  # 输出尺寸（渲染帧是超采样的大图）
-    SCALE.update(tl.get("text", {}))
-    if tl.get("lang") == "en":   # 纯英文：英文升为主行，用英文字体，不留空的第二行
-        ALIAS.update(zh="en", zh_b="en_b")
-        for it in tl["items"]:
-            it["zh"], it["en"] = it["en"], ""
-    items = merge_steps(tl["items"])
+    items = prepare(tl)
     seen = {}
     for name in files:
         fr = int(name[2:-4])
@@ -233,9 +291,9 @@ def main(out):
                 draw_callout(P, it, a, fr)
         P.result(w, h).save(dst)
         seen[key] = dst
-    print(f"overlay: {len(files)} frames, {len(set(seen.values()))} unique")
+    say(f"overlay: {len(files)} frames, {len(set(seen.values()))} unique")
     if FITTED:
-        print("提示：下面这些文字一行放不下，已自动折行或缩小字号，看 review 图确认效果；想要更整齐就改短：")
+        say("提示：下面这些文字一行放不下，已自动折行或缩小字号，看 review 图确认效果；想要更整齐就改短：")
         for t in sorted(FITTED):
-            print("  -", t)
+            say("  - " + t)
 

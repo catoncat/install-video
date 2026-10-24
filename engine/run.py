@@ -44,9 +44,11 @@ def export_timeline(tl, path, extra):
         f = lambda sec: start + round(sec * FPS)
         if s["title"]:
             items.append(dict(type="card" if s["card"] else "step", frames=[start, end - 1], step=s["step"],
-                              zh=s["title"][0], en=s["title"][1]))
+                              zh=s["title"][0], en=s["title"][1], pos=s.get("card_pos", "bottom"),
+                              sub=list(s["subtitle"]) if s.get("subtitle") else None, shot=s["id"]))
         for n in s["notes"]:
-            items.append(dict(type="note", frames=[f(n["at"]), min(end - 1, f(n["at"] + n["dur"]))], zh=n["zh"], en=n["en"]))
+            items.append(dict(type="note", frames=[f(n["at"]), min(end - 1, f(n["at"] + n["dur"]))], zh=n["zh"], en=n["en"],
+                              shot=s["id"]))
         for c in s["callouts"]:
             a, b = f(c["at"]), min(end - 1, f(c["at"] + c["dur"]))
             objs = resolve(c["sel"])
@@ -55,7 +57,8 @@ def export_timeline(tl, path, extra):
                 sc.frame_set(fr)
                 p = world_to_camera_view(sc, cam, bbox_center(objs, c.get("anchor", "center")))
                 track[fr] = [round(p.x, 4), round(1 - p.y, 4), p.z > 0]
-            items.append(dict(type="callout", frames=[a, b], zh=c["zh"], en=c["en"], side=c["side"], track=track))
+            items.append(dict(type="callout", frames=[a, b], zh=c["zh"], en=c["en"], side=c["side"], track=track,
+                              shot=s["id"]))
     data = dict(fps=FPS, frame_end=tl.frame_end, items=items,
                 shots=[dict(id=s["id"], start=a, end=b - 1) for s, a, b in tl.shots], **extra)
     with open(path, "w", encoding="utf-8") as fh:
@@ -86,6 +89,7 @@ def main(argv):
         export_timeline(tl, os.path.join(out, "timeline.json"),
                         dict(music=getattr(shots, "MUSIC", {}), size=scene.output_size(args.quality),
                              lang=getattr(shots, "LANG", "zh+en"), text=getattr(shots, "TEXT", {}),
+                             max_words=getattr(shots, "MAX_WORDS", None),
                              name=args.quality + ("_" + args.shots.replace(",", "_") if args.shots else "")))
     sc = bpy.context.scene
     ranges = [(sc.frame_start, sc.frame_end)]
@@ -95,7 +99,11 @@ def main(argv):
         if not ranges:
             raise ValueError(f"--shots {args.shots} 没匹配到任何 shot：{[s['id'] for s, _, _ in tl.shots]}")
     sc.frame_step = args.step
-    print(f"timeline: {', '.join(f'{a}-{b}' for a, b in ranges)} ({sum(b - a + 1 for a, b in ranges) / anim.FPS:.1f}s)")
+    if not args.part:
+        from engine.log import say
+        say(f"timeline: {', '.join(f'{a}-{b}' for a, b in ranges)} ({sum(b - a + 1 for a, b in ranges) / anim.FPS:.1f}s)")
+        for w in dict.fromkeys(tl.warnings):
+            say("警告：" + w)
     if args.no_render:
         return tl
     frames = os.path.join(out, "frames")
