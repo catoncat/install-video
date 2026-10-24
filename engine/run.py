@@ -51,6 +51,98 @@ def versions(shots):
     return out
 
 
+# 卡片在画面里大致占的区域（归一化，y 向下）：x 范围, {位置: y 范围}
+CARD_BANDS = {"top": (0.05, 0.30), "center": (0.38, 0.62), "bottom": (0.60, 0.87)}
+
+def subject_box(frames):
+    """这几帧里可见主体（模型 + 复制品）在画面上的包围框（归一化，y 向下），看不到就返回 None"""
+    import bpy
+    from mathutils import Vector
+    from bpy_extras.object_utils import world_to_camera_view
+    from engine.anim import model_objects
+    sc, cam = bpy.context.scene, bpy.context.scene.camera
+    xs, ys = [], []
+    for fr in frames:
+        sc.frame_set(fr)
+        ok = lambda o: o.type == "MESH" and not o.hide_render and not o.get("bg") and "ground" not in o.get("stage", "")
+        objs = [(o, o.matrix_world) for o in model_objects() if ok(o)]
+        for e in [o for o in sc.objects if o.get("copies") and not o.hide_render and o.instance_collection]:
+            objs += [(o, e.matrix_world @ o.matrix_world) for o in e.instance_collection.objects if ok(o)]
+        for o, mw in objs:
+            for c in o.bound_box:
+                p = world_to_camera_view(sc, cam, mw @ Vector(c))
+                if p.z > 0:
+                    xs.append(min(max(p.x, 0), 1))
+                    ys.append(min(max(1 - p.y, 0), 1))
+    return (min(xs), min(ys), max(xs), max(ys)) if xs else None
+
+def card_overlap(box, pos, fmt):
+    """主体伸进卡片区域（上下各多留 3% 余量）的深度占卡片区域高度的比例；左右不相交就是 0"""
+    half = 0.42 if fmt == "9:16" else 0.33
+    y0, y1 = CARD_BANDS[pos][0] - 0.03, CARD_BANDS[pos][1] + 0.03
+    if min(0.5 + half, box[2]) <= max(0.5 - half, box[0]):
+        return 0.0
+    return max(0.0, min(y1, box[3]) - max(y0, box[1])) / (y1 - y0)
+
+def reframe(start, end, box, pos):
+    """让主体避开卡片：先把相机沿视线拉远到主体放得下，再把相机和注视点一起平移，主体移出卡片区域"""
+    import bpy, math
+    from mathutils import Vector
+    from engine.anim import fcurves
+    sc = bpy.context.scene
+    cam, tgt = sc.camera, bpy.data.objects["CAM_TGT"]
+    lo, hi = (0.05, CARD_BANDS["bottom"][0] - 0.06) if pos == "bottom" else (CARD_BANDS["top"][1] + 0.06, 0.95)
+    k = max(1.0, (box[3] - box[1]) / (hi - lo))             # 主体太高就拉远 k 倍（画面里约缩小到 1/k）
+    y0, y1 = 0.5 + (box[1] - 0.5) / k, 0.5 + (box[3] - 0.5) / k
+    dy = (y1 - hi) if pos == "bottom" else (y0 - lo)          # 需要把主体在画面里上移（>0）/ 下移（<0）多少
+    frames = sorted({round(kp.co.x) for fc in fcurves(cam) if fc.data_path == "location"
+                     for kp in fc.keyframe_points if start <= kp.co.x < end})
+    rw, rh = sc.render.resolution_x, sc.render.resolution_y
+    moved = []
+    for fr in frames:
+        sc.frame_set(fr)
+        c, t = cam.matrix_world.translation.copy(), tgt.matrix_world.translation.copy()
+        fwd = (t - c).normalized()
+        right = fwd.cross(Vector((0, 0, 1))).normalized()
+        up = right.cross(fwd)
+        d = (t - c).length * k
+        half_h = d * math.tan(cam.data.angle_x / 2) * rh / rw          # 注视点处画面半高（米）
+        shift = -up * dy * 2 * half_h                                 # 主体上移 = 相机和注视点下移
+        moved.append((fr, t - fwd * d + shift, t + shift))
+    for fr, c, t in moved:
+        cam.location, tgt.location = c, t
+        cam.keyframe_insert("location", frame=fr)
+        tgt.keyframe_insert("location", frame=fr)
+
+def place_card(tl, s, start, end):
+    """card_pos="auto"：选主体遮挡最少的位置（优先底部，再顶部）；还挡着就调机位让开；仍超过 10% 才警告"""
+    pos = s.get("card_pos", "auto")
+    if any(isinstance(a, dict) and a.get("kind") == "photo" for a in s["do"]):     # 照片铺满画面，不用避让
+        return "bottom" if pos == "auto" else pos
+    frames = [start, (start + end) // 2, end - 1]
+    box = subject_box(frames)
+    if box is None:
+        return "bottom" if pos == "auto" else pos
+    auto = pos == "auto"
+    if auto:
+        pos = min(("bottom", "top"), key=lambda p: (round(card_overlap(box, p, tl.fmt), 2), p != "bottom"))
+        if card_overlap(box, pos, tl.fmt) > 0.10:
+            reframe(start, end, box, pos)
+            box = subject_box(frames)
+    ov = card_overlap(box, pos, tl.fmt)
+    if ov > 0.10:
+        tl.warnings.append(f"{s['id']}：卡片（{pos}）和主体重叠 {ov:.0%}。把 cam 的注视点往卡片那一侧挪、或拉远，"
+                           f"或换 card_pos")
+    return pos
+
+
+def place_cards(tl):
+    """所有进程（含并行渲染进程）建完时间线后都要跑：决定卡片位置，必要时改机位关键帧"""
+    for s, start, end in tl.shots:
+        if s["title"] and s["card"]:
+            s["_card_pos"] = place_card(tl, s, start, end)
+
+
 def export_timeline(tl, path, extra):
     """把字幕、标注和标注锚点的屏幕坐标写成 JSON，给 overlay / compose 用"""
     import bpy
@@ -62,7 +154,8 @@ def export_timeline(tl, path, extra):
         f = lambda sec: start + round(sec * FPS)
         if s["title"]:
             items.append(dict(type="card" if s["card"] else "step", frames=[start, end - 1], step=s["step"],
-                              zh=s["title"][0], en=s["title"][1], pos=s.get("card_pos", "bottom"),
+                              zh=s["title"][0], en=s["title"][1],
+                              pos=s.get("_card_pos"),
                               sub=list(s["subtitle"]) if s.get("subtitle") else None, shot=s["id"]))
         for n in s["notes"]:
             items.append(dict(type="note", frames=[f(n["at"]), min(end - 1, f(n["at"] + n["dur"]))], zh=n["zh"], en=n["en"],
@@ -104,6 +197,7 @@ def main(argv):
     scene.setup(args.quality, getattr(shots, "STYLE", None), fmt)
     tl = anim.Timeline(fmt, getattr(shots, "FORMAT_ZOOM", None), os.path.abspath(args.product)).build(shots.SHOTS)
     tl.frame_end = bpy.context.scene.frame_end
+    place_cards(tl)
 
     out = out_dir(args.product, fmt)
     os.makedirs(out, exist_ok=True)

@@ -18,10 +18,11 @@ FORMAT_ZOOM = {"16:9": 1.0, "1:1": 1.15, "9:16": 1.3}
 
 # ---------------- 分镜数据构造（只是返回 dict，方便书写） ----------------
 def shot(id, dur, title=None, cam=None, do=(), show=None, hide=(), notes=(), callouts=(), step=None, card=False,
-         card_pos="bottom", subtitle=None, module=None):
+         card_pos="auto", subtitle=None, module=None):
     """title=(中, 英)；show=该 shot 开头可见的选择器（不给则沿用上一个 shot 结束时的状态）；
        hide=只在本 shot 内临时隐藏；step=左上角步骤编号；card=True 时标题居中大字显示（片头片尾），
-       card_pos=top / center / bottom 决定卡片在画面里的位置，subtitle=(中, 英) 是卡片的第二行小字。
+       card_pos=auto / top / center / bottom：卡片位置，auto 按主体在画面里的位置自动避让（重叠超过 10% 会警告）；
+       subtitle=(中, 英) 是卡片的第二行小字。
        module：这个镜头属于哪一段（如 "intro" / "install" / "options" / "scenes" / "cta"），出片时统计各段时长占比。
        cam=None 时沿用上一个 shot 结束时的机位。"""
     return dict(id=id, dur=dur, title=title, cam=cam, do=list(do), show=show, hide=list(hide),

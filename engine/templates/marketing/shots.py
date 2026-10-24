@@ -48,7 +48,7 @@ def step(n, zh, en, dur, **kw):
 
 SHOTS = [
     shot("00_title", 4, title=("拼装式集装箱房", "Detachable Container House"),
-         subtitle=("快速安装 · 平板包装 · 模块化", "Fast Installation · Flat Pack"), card=True, card_pos="top",
+         subtitle=("快速安装 · 平板包装 · 模块化", "Fast Installation · Flat Pack"), card=True,
          module="intro", show=FULL, cam=cam((0, 0, 2.2), (-40, -25), 14, (13, 11.5))),   # 注视点抬高，箱体在画面下半部，标题在上
 
     step(1, "基础找平", "Prepare Foundation", 3.5, show=["@00_ground"],
@@ -103,17 +103,17 @@ SHOTS = [
          notes=[note(0.6, 2.3, "地板：SPC 石塑", "Floor: SPC / WPC / Tile")]),
 
     # ---------------- 应用场景：用户照片打底 + 场景名 ----------------
-    *[shot(f"10{chr(97 + i)}_scene", 2.5, title=("", name), card=True, card_pos="center", module="scenes",
+    *[shot(f"10{chr(97 + i)}_scene", 2.5, title=("", name), card=True, module="scenes",
            cam=cam((0, m.W, m.H), -35, 18, 20), do=[photo(path)] + ([copies(FULL[2:], COMBO, at=0)] if i == 0 else []))
       for i, (name, path) in enumerate(PHOTOS.items())],
 
-    shot("10c_scene", 2.5, title=("", "Worker Dormitory"), card=True, card_pos="center", module="scenes",
+    shot("10c_scene", 2.5, title=("", "Worker Dormitory"), card=True, module="scenes",
          cam=cam((0, m.W, m.H), (-40, -30), 18, 20)),
 
     # ---------------- 询盘结尾 ----------------
     shot("11a_cta", 3, title=("支持 OEM/ODM", "OEM/ODM Available"), subtitle=("批发与项目供货", "Wholesale & Project Supply"),
-         card=True, card_pos="center", module="cta", cam=cam((0, m.W, m.H), (-30, -20), 18, 21)),
+         card=True, module="cta", cam=cam((0, m.W, m.H), (-30, -20), 18, 21)),
 
-    shot("11b_cta", 2.5, title=("联系我们获取目录和报价", "Contact Us for Catalog & Price"), card=True, card_pos="center",
+    shot("11b_cta", 2.5, title=("联系我们获取目录和报价", "Contact Us for Catalog & Price"), card=True,
          module="cta"),
 ]

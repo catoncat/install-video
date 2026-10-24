@@ -160,7 +160,7 @@ def draw_card(P, it, a):
         srows, sw, sh = block(P, it["sub"][0], it["sub"][1], "card_sub", "zh", "en", (232, 235, 240), (200, 206, 214))
         gap = sz("card_sub")[0] * 0.4
         rows, w, h = rows + [("", "en", 1, (0, 0, 0), gap)] + srows, max(w, sw), h + gap + sh
-    pos = it.get("pos", "bottom")
+    pos = it.get("pos") or "bottom"
     top, bot = margins()
     y = (top + 100 if pos == "top" else DH / 2 - h / 2 if pos == "center"
          else min(DH * 0.685, DH - bot - 120 - h))                  # 底部时给字幕留位置
