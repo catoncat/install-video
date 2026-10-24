@@ -1,4 +1,4 @@
-"""合成（在 Blender 里运行，不需要 ffmpeg）：渲染帧 + 字幕层 + 音乐 → out/video.mp4，
+"""合成（在 Blender 里运行，不需要 ffmpeg）：渲染帧 + 字幕层 + 音乐 → out/<档位>[_<shots>].mp4，
 再按 shot 生成关键帧拼图 out/review/<shot>.jpg，供 agent 自查。
 
 音乐：产品目录下有 music.*（mp3/wav/m4a/ogg）就用它，没有就用 music.py 程序合成。
@@ -59,7 +59,7 @@ def compose(out, product_dir):
     ff.format, ff.codec = "MPEG4", "H264"
     ff.constant_rate_factor, ff.ffmpeg_preset = "HIGH", "GOOD"
     ff.audio_codec, ff.audio_bitrate, ff.audio_channels, ff.audio_mixrate = "AAC", 192, "STEREO", 44100
-    video = os.path.join(out, "video.mp4")
+    video = os.path.join(out, tl.get("name", "video") + ".mp4")     # 按档位和 shot 命名，小样不会覆盖全片
     if os.path.exists(video):
         os.remove(video)
     r.filepath = video
@@ -77,13 +77,13 @@ def check(video, size, frames, fps):
     bpy.data.movieclips.remove(clip)
     want = (tuple(size), frames, fps)
     if got[0] != want[0] or abs(got[1] - want[1]) > 1 or got[2] != want[2]:
-        os.replace(video, video + ".bad.mp4")
+        os.replace(video, video[:-4] + ".bad.mp4")
         raise RuntimeError(f"成片不符合预期：得到 尺寸{got[0]} 帧数{got[1]} 帧率{got[2]}，应为 尺寸{want[0]} 帧数{want[1]} 帧率{want[2]}。"
-                           f"已改名为 video.mp4.bad.mp4")
+                           f"已改名为 {os.path.basename(video)[:-4]}.bad.mp4")
 
 
 def review(out, tl, video, nums, per=6, tw=640):
-    """从成片 video.mp4 里按 shot 各截 per 帧，拼成 3 列：out/review/<shot>.jpg。
+    """从成片里按 shot 各截 per 帧，拼成 3 列：out/review/<shot>.jpg。
        截的是最终视频，所以合成、缩放、字幕层的问题都能在这里看到。"""
     from . import tools
     rdir = os.path.join(out, "review")

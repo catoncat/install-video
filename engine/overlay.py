@@ -73,59 +73,82 @@ class Painter:
         return self.img.resize((w, h), Image.LANCZOS)
 
 
-def two_lines(P, x, y, zh, en, zpx, epx, zc, ec, a, zk="zh_b", ek="en"):
-    """中文在上英文在下，返回总宽高"""
-    zw, zh_h = P.text_size(zh, zk, zpx)
-    ew, _ = P.text_size(en, ek, epx)
-    P.text((x, y), zh, zk, zpx, zc, a)
-    P.text((x, y + zpx * 1.25), en, ek, epx, ec, a)
-    return max(zw, ew), zpx * 1.25 + (epx * 1.2 if en else 0)
-
-def measure(P, zh, en, zpx, epx, zk="zh_b", ek="en"):
-    return max(P.text_size(zh, zk, zpx)[0], P.text_size(en, ek, epx)[0]), zpx * 1.25 + (epx * 1.2 if en else 0)
-
-
 # 各类文字的（主行, 副行）字号，按 1920×1080 设计；产品可在 shots.py 里用 TEXT = dict(card=1.5) 按类型放大
 SIZE = {"step": (40, 22), "card": (64, 30), "note": (34, 23), "callout": (28, 20)}
+MAXW = {"step": 1300, "card": 1680, "note": 1640, "callout": 720}     # 每类文字一行的最大宽度
 SCALE = {}
+FITTED = set()     # 被自动折行或缩小过的文字，最后统一提示
 
 def sz(kind):
     k = SCALE.get(kind, 1.0)
     return SIZE[kind][0] * k, SIZE[kind][1] * k
 
+def wrap(P, text, kind, px, maxw):
+    if P.text_size(text, kind, px)[0] <= maxw:
+        return [text]
+    sep = " " if " " in text else ""          # 有空格按词断（英文、中英混排），否则按字断（纯中文）
+    lines, cur = [], ""
+    for t in (text.split(" ") if sep else list(text)):
+        cand = cur + sep + t if cur else t
+        if not cur or P.text_size(cand, kind, px)[0] <= maxw:
+            cur = cand
+        else:
+            lines.append(cur)
+            cur = t
+    return lines + [cur]
+
+def fit(P, text, kind, px, maxw, max_lines=2):
+    """太长就折行；折成两行还放不下就逐步缩小字号（最小到 60%）"""
+    if not text:
+        return [], px
+    p = px
+    lines = wrap(P, text, kind, p, maxw)
+    while len(lines) > max_lines and p > px * 0.6:
+        p *= 0.9
+        lines = wrap(P, text, kind, p, maxw)
+    if len(lines) > 1 or p != px:
+        FITTED.add(text)
+    return lines, p
+
+def block(P, zh, en, kind, zk="zh_b", ek="en", zc=INK, ec=INK2):
+    """中文（主行）在上、英文（副行）在下的文字块：返回 (行列表, 宽, 高)"""
+    zp, ep = sz(kind)
+    zl, zp = fit(P, zh, zk, zp, MAXW[kind])
+    el, ep = fit(P, en, ek, ep, MAXW[kind])
+    rows = [(t, zk, zp, zc, zp * 1.25) for t in zl] + [(t, ek, ep, ec, ep * 1.2) for t in el]
+    w = max([P.text_size(t, k, px)[0] for t, k, px, _, _ in rows] or [0])
+    return rows, w, sum(r[4] for r in rows)
+
+def draw_rows(P, rows, x, y, a, center=None):
+    for t, k, px, c, lh in rows:
+        tx = center - P.text_size(t, k, px)[0] / 2 if center is not None else x
+        P.text((tx, y), t, k, px, c, a)
+        y += lh
+
 def draw_step(P, it, a):
-    zp, ep = sz("step")
     x, y = 56, 48
-    w, h = measure(P, it["zh"], it["en"], zp, ep)
+    rows, w, h = block(P, it["zh"], it["en"], "step")
     hb = max(84, h + 18)
     if it.get("step"):
         P.rect((x, y, x + hb, y + hb), 14, ACCENT, 255 * a)
         num = f"{it['step']:02d}"
-        nw, _ = P.text_size(num, "en_b", hb * 0.52)
-        P.text((x + hb / 2 - nw / 2, y + hb * 0.17), num, "en_b", hb * 0.52, (255, 255, 255), a)
+        nw, _ = P.text_size(num, "en_b", min(hb, 110) * 0.52)
+        P.text((x + hb / 2 - nw / 2, y + hb / 2 - min(hb, 110) * 0.33), num, "en_b", min(hb, 110) * 0.52, (255, 255, 255), a)
         x += hb + 20
     P.rect((x - 16, y, x + w + 20, y + hb), 14, (255, 255, 255), 215 * a)
-    two_lines(P, x, y + (hb - h) / 2, it["zh"], it["en"], zp, ep, INK, INK2, a)
+    draw_rows(P, rows, x, y + (hb - h) / 2, a)
 
 def draw_card(P, it, a):
-    zp, ep = sz("card")
-    w, h = measure(P, it["zh"], it["en"], zp, ep)
-    x, y = 960 - w / 2, min(740, 1080 - 190 - h)      # 放大后往上挪，给底部字幕留位置
-    P.rect((x - 40, y - 28, x + w + 40, y + h + 30), 20, (18, 20, 24), 170 * a)
-    zw = P.text_size(it["zh"], "zh_b", zp)[0]
-    ew = P.text_size(it["en"], "en", ep)[0]
-    P.text((960 - zw / 2, y), it["zh"], "zh_b", zp, (255, 255, 255), a)
-    P.text((960 - ew / 2, y + zp * 1.25), it["en"], "en", ep, (225, 228, 232), a)
+    rows, w, h = block(P, it["zh"], it["en"], "card", zc=(255, 255, 255), ec=(225, 228, 232))
+    y = min(740, 1080 - 190 - h)          # 放大或折行后往上挪，给底部字幕留位置
+    P.rect((960 - w / 2 - 40, y - 28, 960 + w / 2 + 40, y + h + 30), 20, (18, 20, 24), 170 * a)
+    draw_rows(P, rows, 0, y, a, center=960)
 
 def draw_note(P, it, a):
-    zp, ep = sz("note")
-    w, h = measure(P, it["zh"], it["en"], zp, ep, "zh", "en")
+    rows, w, h = block(P, it["zh"], it["en"], "note", "zh", "en", (255, 255, 255), (220, 224, 230))
     y = 1080 - 70 - h
     P.rect((960 - w / 2 - 34, y - 20, 960 + w / 2 + 34, y + h + 14), 16, (18, 20, 24), 175 * a)
-    zw = P.text_size(it["zh"], "zh", zp)[0]
-    ew = P.text_size(it["en"], "en", ep)[0]
-    P.text((960 - zw / 2, y), it["zh"], "zh", zp, (255, 255, 255), a)
-    P.text((960 - ew / 2, y + zp * 1.25), it["en"], "en", ep, (220, 224, 230), a)
+    draw_rows(P, rows, 0, y, a, center=960)
 
 OFF = {"right": (150, -110), "left": (-150, -110), "up": (0, -170), "down": (0, 150)}
 
@@ -134,8 +157,7 @@ def draw_callout(P, it, a, fr):
     if not front:
         return
     px, py = x * 1920, y * 1080
-    zp, ep = sz("callout")
-    w, h = measure(P, it["zh"], it["en"], zp, ep)
+    rows, w, h = block(P, it["zh"], it["en"], "callout")
     pad = 16
     dx, dy = OFF[it["side"]]
     if it["side"] == "right":
@@ -154,7 +176,7 @@ def draw_callout(P, it, a, fr):
     P.dot((px, py), 7, ACCENT, a, ring=(255, 255, 255))
     P.rect((bx, by, bx + w + 2 * pad, by + h + pad), 12, (255, 255, 255), 235 * a)
     P.rect((bx, by, bx + 6, by + h + pad), 3, ACCENT, 255 * a)
-    two_lines(P, bx + pad + 2, by + pad * 0.6, it["zh"], it["en"], zp, ep, INK, INK2, a)
+    draw_rows(P, rows, bx + pad + 2, by + pad * 0.6, a)
 
 
 def alpha(fr, a, b):
@@ -212,4 +234,8 @@ def main(out):
         P.result(w, h).save(dst)
         seen[key] = dst
     print(f"overlay: {len(files)} frames, {len(set(seen.values()))} unique")
+    if FITTED:
+        print("提示：下面这些文字一行放不下，已自动折行或缩小字号，看 review 图确认效果；想要更整齐就改短：")
+        for t in sorted(FITTED):
+            print("  -", t)
 

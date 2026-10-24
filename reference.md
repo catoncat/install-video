@@ -7,7 +7,7 @@
   model.py      必需：build() 建模
   shots.py      必需：SHOTS 分镜；MUSIC 可选，用来调音乐
   music.mp3     可选：指定背景音乐，不放就用程序合成
-  out/          自动生成：frames/ overlay/ review/ timeline.json music.wav video.mp4
+  out/          自动生成：frames/ overlay/ review/ timeline.json music.wav <档位>[_<shots>].mp4（如 draft.mp4、final_03b.mp4）
 ```
 两个文件都是普通 Python。积木不够用时，直接写 bpy 代码。
 

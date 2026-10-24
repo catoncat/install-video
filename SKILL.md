@@ -22,7 +22,7 @@ API 细节见 [reference.md](reference.md)，完整示例见 `examples/kpx2/`（
    - **Linux**：用 snap 安装。
    - Blender 装在非默认位置时，设置环境变量 `BLENDER=<blender 可执行文件路径>`。
 2. 输出里出现以 `| ok` 结尾的那一行，才算环境装好（之后 Blender 还会打印一行退出信息，不用管）。输出里列出的字体就是视频字幕会用的中英文字体，缺中文字体时要提醒用户。
-3. 先跑一遍示例验证：`video make <skill>/examples/kpx2 draft 05a`，几十秒后会生成 `examples/kpx2/out/video.mp4`。
+3. 先跑一遍示例验证：`video make <skill>/examples/kpx2 draft 05a`，几十秒后会生成 `examples/kpx2/out/draft_05a.mp4`。
 4. 提前告诉用户需要多少资源：磁盘约 2 GB；1080p 成片每分钟视频大约要渲染 20 到 60 分钟，主要看显卡。预览档大约是成片的一半。第一次渲染还要编译着色器，会更慢一些。
 
 可选：要在用户打开的 Blender 里实时搭建和查看，可以装 Blender MCP（`uvx blender-mcp` 加配套插件），用法见 reference.md。不装也能完整出片，自查靠 review 拼图。
@@ -77,11 +77,11 @@ video compose <产品目录>                 只改了字幕或音乐时用，�
 
 ## 7. 成片和交付
 
-**出成片前先做小样**：`video make <产品目录> final <一个 shot>`，打开 `out/video.mp4` 和 review 图确认尺寸、比例、构图、字幕都对，再出全片。每次出片后，引擎会自动核对视频的尺寸、帧数和帧率，对不上直接报错。
+**出成片前先做小样**：`video make <产品目录> final <一个 shot>`，打开 `out/final_<shot>.mp4` 和 review 图确认尺寸、比例、构图、字幕都对，再出全片。每次出片后，引擎会自动核对视频的尺寸、帧数和帧率，对不上直接报错。
 
 
 `video make <产品目录> final`（1080p，逐帧渲染，耗时较长，可以放到后台跑）。交给用户的东西：
-- `out/video.mp4`
+- `out/final.mp4`
 - 分镜文档
 - 需要工厂确认的清单（说明这些确认后哪里要改，改完只需重新运行一次命令）
 
