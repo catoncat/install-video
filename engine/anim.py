@@ -11,22 +11,28 @@ from . import geo
 
 FPS = 30
 HL_IN, HL_OUT = 0.2, 0.5          # 高亮淡入 / 淡出秒数
+# 非 16:9 画幅的镜头放大倍数（相机按水平视野对齐，竖屏 / 方屏上下空间多，适当推近）。
+# 产品可在 shots.py 写 FORMAT_ZOOM 覆盖，单个镜头用 cam(..., fmt={"9:16": dict(dist=..., lens=...)}) 覆盖
+FORMAT_ZOOM = {"16:9": 1.0, "1:1": 1.15, "9:16": 1.3}
 
 
 # ---------------- 分镜数据构造（只是返回 dict，方便书写） ----------------
 def shot(id, dur, title=None, cam=None, do=(), show=None, hide=(), notes=(), callouts=(), step=None, card=False,
-         card_pos="bottom", subtitle=None):
+         card_pos="bottom", subtitle=None, module=None):
     """title=(中, 英)；show=该 shot 开头可见的选择器（不给则沿用上一个 shot 结束时的状态）；
        hide=只在本 shot 内临时隐藏；step=左上角步骤编号；card=True 时标题居中大字显示（片头片尾），
        card_pos=top / center / bottom 决定卡片在画面里的位置，subtitle=(中, 英) 是卡片的第二行小字。
+       module：这个镜头属于哪一段（如 "intro" / "install" / "options" / "scenes" / "cta"），出片时统计各段时长占比。
        cam=None 时沿用上一个 shot 结束时的机位。"""
     return dict(id=id, dur=dur, title=title, cam=cam, do=list(do), show=show, hide=list(hide),
-                notes=list(notes), callouts=list(callouts), step=step, card=card, card_pos=card_pos, subtitle=subtitle)
+                notes=list(notes), callouts=list(callouts), step=step, card=card, card_pos=card_pos, subtitle=subtitle,
+                module=module)
 
-def cam(target, az, el, dist, lens=35, target_end=None):
+def cam(target, az, el, dist, lens=35, target_end=None, fmt=None):
     """相机围绕 target（选择器或 (x,y,z)）的球坐标。az/el 为度（az=0 在 -Y 正前方，逆时针为正），dist 为米。
-       az/el/dist/lens 给 (起, 止) 就在本 shot 内平滑过渡；target_end 让注视点也移动。"""
-    return dict(target=target, target_end=target_end, az=az, el=el, dist=dist, lens=lens)
+       az/el/dist/lens 给 (起, 止) 就在本 shot 内平滑过渡；target_end 让注视点也移动。
+       fmt={"9:16": dict(dist=..., lens=..., el=...)}：某个画幅单独改机位（给了 lens 就不再乘 FORMAT_ZOOM）。"""
+    return dict(target=target, target_end=target_end, az=az, el=el, dist=dist, lens=lens, fmt=fmt or {})
 
 def move(sel, at, dur, frm=(0, 0, 0), to=(0, 0, 0), out=None, spin=0, stagger=0.0, hl=None, exit=False):
     """把对象从 静止位置+frm 移到 静止位置+to。
@@ -63,6 +69,17 @@ def copies(sel, spots, at=0.0, until=None, drop=0.0, dur=1.2, stagger=0.0, name=
 def grow(sel, at, dur=1.5, stagger=0.0, hl=True):
     """沿对象的 ["grow_axis"] 从 0 长到原长（打胶、走线、画线）。原点要在起点"""
     return dict(kind="grow", sel=sel, at=at, dur=dur, stagger=stagger, hl=hl)
+
+def photo(path, at=0.0, dur=None, zoom=(1.0, 1.08)):
+    """全屏照片（用户自己的场景图、实拍图）：贴在相机前，按画幅铺满（多出的部分裁掉），
+       zoom=(起, 止) 缓慢推近。只在本 shot 的 [at, at+dur] 可见。路径相对产品目录；文件不存在时跳过并提示。
+       常和 shot(card=True, title=...) 一起用：照片打底，卡片写场景名。"""
+    return dict(kind="photo", path=path, at=at, dur=dur, zoom=zoom)
+
+def swap(sel, tag, at, hl=0.0):
+    """把 sel 换成用 geo.variant() 做好的另一种材质版本（tag），tag=None 换回原样。
+       用于"同一箱体 + 不同外墙 / 地板"的定制选项展示。变体跟着原件的静止位置，不跟原件的动画"""
+    return dict(kind="swap", sel=sel, tag=tag, at=at, hl=hl)
 
 def appear(sel, at, hl=0.0):
     """直接出现；hl>0 时高亮 hl 秒"""
@@ -165,7 +182,10 @@ class Ctx:
 
 
 class Timeline:
-    def __init__(self):
+    def __init__(self, fmt="16:9", zoom=None, base_dir=""):
+        self.fmt = fmt
+        self.zoom = {**FORMAT_ZOOM, **(zoom or {})}.get(fmt, 1.0)
+        self.base_dir = base_dir           # photo() 相对路径的起点（产品目录）
         self.vis_events = {}       # obj -> [(frame, visible)]
         self.interp = {}           # obj -> {frame: "CONSTANT"/"LINEAR"}：CONSTANT 表示该关键帧之后保持不动
         self.cuts = []             # [(obj, frame)]：该帧之前最后一个关键帧改成 CONSTANT（硬切）
@@ -194,7 +214,7 @@ class Timeline:
         for ob in scene_camera():
             ob.animation_data_clear()
         bpy.data.objects["CAM"].data.animation_data_clear()
-        for ob in [o for o in bpy.data.objects if o.get("copies")]:      # 上次建的副本
+        for ob in [o for o in bpy.data.objects if o.get("copies") or o.get("photo")]:      # 上次建的副本、照片
             bpy.data.objects.remove(ob, do_unlink=True)
         for c in [c for c in bpy.data.collections if c.name.startswith("COPIES_")]:
             bpy.data.collections.remove(c)
@@ -214,12 +234,19 @@ class Timeline:
             tmp_hidden = set(resolve(s["hide"])) if s["hide"] else set()
             for o in objs:
                 self.vis_events.setdefault(o, []).append((start, o in state and o not in tmp_hidden))
+            photos = []
             for a in s["do"]:
                 if callable(a):
                     a(ctx)
                     continue
                 if a["kind"] == "copies":
                     self._copies(ctx, a)
+                    continue
+                if a["kind"] == "photo":           # 要用到本 shot 的镜头参数，等相机设好再做
+                    photos.append(a)
+                    continue
+                if a["kind"] == "swap":
+                    self._swap(ctx, a, state)
                     continue
                 targets = resolve(a["sel"])
                 pivot = self._pivot(a, targets) if a["kind"] == "rotate" else None
@@ -261,6 +288,8 @@ class Timeline:
                     else:
                         state.add(o)
             self._camera(ctx, s, start, end)
+            for a in photos:
+                self._photo(ctx, a)
             self.shots.append((s, start, end))
             frame = end
         self._write_vis()
@@ -364,6 +393,68 @@ class Timeline:
                 ev.append((ctx.f(a["until"]), False))
             self.vis_events.setdefault(e, []).extend(ev)
 
+    def _swap(self, ctx, a, state):
+        """原件和它的各个材质变体之间切换显隐：只显示 tag 指定的那一个"""
+        objs = model_objects()
+        for base in [o for o in resolve(a["sel"]) if not o.get("variant_of")]:
+            group = [base] + [o for o in objs if o.get("variant_of") == base.name]
+            want = base if a["tag"] is None else next((o for o in group if o.get("variant") == a["tag"]), None)
+            if want is None:
+                raise ValueError(f"{base.name} 没有材质变体 {a['tag']!r}，先在 shots.py 的 prepare() 里用 geo.variant() 建")
+            for o in group:
+                ctx.vis(o, a["at"], o is want)
+                (state.add if o is want else state.discard)(o)
+            if a["hl"]:
+                self._hl(ctx, want, a["at"], a["hl"])
+
+    def _photo(self, ctx, a):
+        """相机前贴一张铺满画面的照片（自发光，不受灯光影响），只在本 shot 里可见"""
+        import os
+        path = a["path"] if os.path.isabs(a["path"]) else os.path.join(self.base_dir, a["path"])
+        if not os.path.exists(path):
+            self.warnings.append(f"照片不存在，已跳过：{path}")
+            return
+        cam, _ = scene_camera()
+        img = bpy.data.images.load(path, check_existing=True)
+        sc = bpy.context.scene
+        d = 1.0
+        fr = cam.data.view_frame(scene=sc)                      # 相机画框四角（相机坐标，z<0），按比例换算到距离 d
+        k = d / abs(fr[0].z)
+        fw = (max(v.x for v in fr) - min(v.x for v in fr)) * k * 1.01   # 多 1% 防止边缘露缝
+        fh = (max(v.y for v in fr) - min(v.y for v in fr)) * k * 1.01
+        u0, v0, u1, v1 = _content_box(path)                     # 去掉宣传图常见的白边 / 纯色边
+        ia = img.size[0] * (u1 - u0) / max(1, img.size[1] * (v1 - v0))
+        pw = max(fw, fh * ia)                                   # cover：铺满画面，多出的部分裁掉
+        ph = pw / ia
+        me = bpy.data.meshes.new("photo")
+        me.from_pydata([(-pw / 2, -ph / 2, 0), (pw / 2, -ph / 2, 0), (pw / 2, ph / 2, 0), (-pw / 2, ph / 2, 0)], [], [(0, 1, 2, 3)])
+        uv = me.uv_layers.new()
+        for li, (u, v) in zip(range(4), ((u0, v0), (u1, v0), (u1, v1), (u0, v1))):
+            uv.data[li].uv = (u, v)
+        ob = bpy.data.objects.new(f"photo_{os.path.splitext(os.path.basename(path))[0]}", me)
+        sc.collection.objects.link(ob)
+        ob["photo"] = True
+        ob.parent = cam
+        ob.location = (0, 0, -d)
+        m = bpy.data.materials.new("photo_" + os.path.basename(path))
+        m.use_nodes = True
+        nt = m.node_tree
+        nt.nodes.clear()
+        tex, em, out = nt.nodes.new("ShaderNodeTexImage"), nt.nodes.new("ShaderNodeEmission"), nt.nodes.new("ShaderNodeOutputMaterial")
+        tex.image = img
+        em.inputs["Strength"].default_value = 1.25              # 色调映射会把照片压暗一点，补回来
+        nt.links.new(tex.outputs["Color"], em.inputs["Color"])
+        nt.links.new(em.outputs[0], out.inputs["Surface"])
+        me.materials.append(m)
+        t0 = a["at"]
+        t1 = ctx.dur if a["dur"] is None else a["at"] + a["dur"]
+        z0, z1 = a["zoom"]
+        for sec, z in ((t0, z0), (t1, z1)):
+            ob.scale = (z, z, 1)
+            ob.keyframe_insert("scale", frame=ctx.f(sec))
+        self._mark(ob, ctx.f(t0), "LINEAR")
+        ctx.only_in_shot(ob, t0, t1)
+
     def _hl(self, ctx, o, at, dur):
         """高亮最晚在本 shot 结束时淡完，不拖进下一个镜头"""
         end = ctx.dur
@@ -397,10 +488,14 @@ class Timeline:
         if c is None:
             return
         cam, tgt = scene_camera()
+        over = c.get("fmt", {}).get(self.fmt, {})
+        c = {**c, **over}
         pair = lambda v: tuple(v) if isinstance(v, (tuple, list)) else (v, v)
         p0 = point(c["target"])
         p1 = point(c["target_end"]) if c["target_end"] is not None else p0
         az, el, di, ln = (pair(c[k]) for k in ("az", "el", "dist", "lens"))
+        if "lens" not in over:                  # 非 16:9 画幅按 FORMAT_ZOOM 推近
+            ln = tuple(v * self.zoom for v in ln)
         n = max(1, (end - 1 - start) // 6)
         for k in range(n + 1):
             u = k / n
@@ -419,6 +514,22 @@ class Timeline:
             for fc in fcurves(ob):
                 for kp in fc.keyframe_points:
                     kp.interpolation = "LINEAR"
+
+
+def _content_box(path, tol=12):
+    """照片四周和角上颜色一致的边（白边、黑边）裁掉，返回 UV 范围 (u0, v0, u1, v1)。读不了就不裁"""
+    try:
+        from PIL import Image, ImageChops
+        im = Image.open(path).convert("RGB")
+        bg = Image.new("RGB", im.size, im.getpixel((0, 0)))
+        box = ImageChops.difference(im, bg).convert("L").point(lambda v: 255 if v > tol else 0).getbbox()
+    except Exception:
+        return 0.0, 0.0, 1.0, 1.0
+    if not box:
+        return 0.0, 0.0, 1.0, 1.0
+    w, h = im.size
+    x0, y0, x1, y1 = box
+    return x0 / w, 1 - y1 / h, x1 / w, 1 - y0 / h             # 图片 y 向下，UV 的 v 向上
 
 
 def fcurves(idb):
@@ -443,5 +554,6 @@ def scene_camera():
         con.up_axis = "UP_Y"
         cam.data.clip_start = 0.02
         cam.data.clip_end = 200
+    bpy.data.objects["CAM"].data.sensor_fit = "HORIZONTAL"     # 各画幅水平视野一致，竖屏只是上下多出空间
     bpy.context.scene.camera = cam
     return cam, bpy.data.objects["CAM_TGT"]

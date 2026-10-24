@@ -24,12 +24,23 @@ QUALITY = {
 }
 SS = 2
 
-def output_size(quality):
+# 画幅：设计尺寸（短边 1080）。文件名里用 tag（16x9），不带冒号
+FORMATS = {"16:9": (1920, 1080), "1:1": (1080, 1080), "9:16": (1080, 1920)}
+
+def design(fmt="16:9"):
+    if fmt not in FORMATS:
+        raise ValueError(f"画幅只能是 {list(FORMATS)}，收到 {fmt!r}")
+    return FORMATS[fmt]
+
+def tag(fmt):
+    return fmt.replace(":", "x")
+
+def output_size(quality, fmt="16:9"):
     pct = QUALITY[quality][0]
-    return 1920 * pct // 100, 1080 * pct // 100
+    return tuple(v * pct // 100 for v in design(fmt))
 
 
-def setup(quality="preview", style=None):
+def setup(quality="preview", style=None, fmt="16:9"):
     st = {**STYLE, **(style or {})}
     sc = bpy.context.scene
     pct, samples = QUALITY[quality]
@@ -37,7 +48,7 @@ def setup(quality="preview", style=None):
         sc.render.engine = "BLENDER_EEVEE"
     except TypeError as e:
         print("engine:", e)
-    sc.render.resolution_x, sc.render.resolution_y = 1920, 1080
+    sc.render.resolution_x, sc.render.resolution_y = design(fmt)
     sc.render.resolution_percentage = pct * SS
     sc.render.fps = 30
     sc.render.image_settings.file_format = "PNG"
@@ -197,7 +208,11 @@ def patch_materials():
         attr = nt.nodes.new("ShaderNodeAttribute"); attr.name = "HL_ATTR"
         attr.attribute_type = "OBJECT"; attr.attribute_name = "hl"
         mix = nt.nodes.new("ShaderNodeMix"); mix.data_type = "RGBA"
-        mix.inputs["A"].default_value = b.inputs["Base Color"].default_value
+        base = b.inputs["Base Color"]
+        if base.is_linked:                 # 贴图 / 程序纹理材质：把原来接进底色的输出接到 A
+            nt.links.new(base.links[0].from_socket, mix.inputs["A"])
+        else:
+            mix.inputs["A"].default_value = base.default_value
         mix.inputs["B"].default_value = (*HL_COLOR, 1)
         scale = nt.nodes.new("ShaderNodeMath"); scale.operation = "MULTIPLY"; scale.inputs[1].default_value = 0.65
         nt.links.new(attr.outputs["Fac"], scale.inputs[0])

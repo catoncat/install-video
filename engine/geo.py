@@ -71,6 +71,27 @@ def mat(name, color, metallic=0.0, rough=0.5, transmission=0.0, emission=0.0):
     return m
 
 
+def variant(sel, tag, material):
+    """材质变体：把 sel（对象列表或选择器）复制一份换成 material，放进 stage "variant_<tag>"，默认不可见。
+       复制品和原件共用网格（材质挂在对象上），名字是 "<原名>@<tag>"。分镜里用 swap(sel, tag, 秒) 切换。
+       在 shots.py 的 prepare() 里调用（模型建好之后、时间线之前）。"""
+    if isinstance(sel, (str, list, tuple)) and not isinstance(next(iter(sel), None), bpy.types.Object):
+        from .anim import resolve              # 运行时再导入，避免和 anim 循环引用
+        sel = resolve(sel)
+    stage = f"variant_{tag}"
+    out = []
+    for o in sel:
+        c = o.copy()                           # 共用网格数据和修改器设置
+        c.name = f"{o.name}@{tag}"
+        c["stage"], c["variant"], c["variant_of"] = stage, tag, o.name
+        for slot in c.material_slots:
+            slot.link = "OBJECT"
+            slot.material = material
+        coll(stage).objects.link(c)
+        out.append(c)
+    return out
+
+
 # ---------------- 几何 ----------------
 def _add_box(bm, size, center):
     r = bmesh.ops.create_cube(bm, size=1.0)

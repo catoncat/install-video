@@ -41,10 +41,18 @@ def font(kind, px):
     return _cache[key]
 
 
+# 设计尺寸（随画幅变：16:9 是 1920×1080，1:1 是 1080×1080，9:16 是 1080×1920），由 prepare() 设定。
+# 字号都按短边 1080 设计，所以各画幅里字的大小一致，只是版面位置不同
+DW, DH = 1920, 1080
+
+def margins():
+    """上、下安全边距：竖屏上下留得多，避开手机 App 的顶栏和底部按钮"""
+    return (48, 70) if DH <= 1080 else (round(DH * 0.06), round(DH * 0.12))
+
 class Painter:
-    """所有尺寸按 1920×1080 设计，k 为实际缩放（含超采样）"""
+    """所有尺寸按设计尺寸 DW×DH 给出，k 为实际缩放（含超采样）"""
     def __init__(self, w, h):
-        self.k = w / 1920 * SS
+        self.k = w / DW * SS
         self.img = Image.new("RGBA", (w * SS, h * SS), (0, 0, 0, 0))
         self.d = ImageDraw.Draw(self.img)
 
@@ -76,7 +84,11 @@ class Painter:
 
 # 各类文字的（主行, 副行）字号，按 1920×1080 设计；产品可在 shots.py 里用 TEXT = dict(card=1.5) 按类型放大
 SIZE = {"step": (40, 22), "card": (64, 30), "card_sub": (36, 24), "note": (34, 23), "callout": (28, 20)}
-MAXW = {"step": 1300, "card": 1680, "card_sub": 1680, "note": 1640, "callout": 720}     # 每类文字一行的最大宽度
+MAXW = {"step": 1300, "card": 1680, "card_sub": 1680, "note": 1640, "callout": 720}     # 每类文字一行的最大宽度（16:9）
+INSET = {"step": 320, "card": 240, "card_sub": 240, "note": 280, "callout": 360}         # 窄画幅时离两边至少留这么多
+
+def maxw(kind):
+    return min(MAXW[kind], DW - INSET[kind])
 SCALE = {}
 FITTED = set()     # 被自动折行或缩小过的文字，最后统一提示
 
@@ -114,8 +126,8 @@ def fit(P, text, kind, px, maxw, max_lines=2):
 def block(P, zh, en, kind, zk="zh_b", ek="en", zc=INK, ec=INK2):
     """中文（主行）在上、英文（副行）在下的文字块：返回 (行列表, 宽, 高)"""
     zp, ep = sz(kind)
-    zl, zp = fit(P, zh, zk, zp, MAXW[kind])
-    el, ep = fit(P, en, ek, ep, MAXW[kind])
+    zl, zp = fit(P, zh, zk, zp, maxw(kind))
+    el, ep = fit(P, en, ek, ep, maxw(kind))
     rows = [(t, zk, zp, zc, zp * 1.25) for t in zl] + [(t, ek, ep, ec, ep * 1.2) for t in el]
     w = max([P.text_size(t, k, px)[0] for t, k, px, _, _ in rows if t] or [0])
     return rows, w, sum(r[4] for r in rows)
@@ -130,7 +142,7 @@ def draw_rows(P, rows, x, y, a, center=None):
         y += lh
 
 def draw_step(P, it, a):
-    x, y = 56, 48
+    x, y = 56, margins()[0]
     rows, w, h = block(P, it["zh"], it["en"], "step")
     hb = max(84, h + 18)
     if it.get("step"):
@@ -149,15 +161,17 @@ def draw_card(P, it, a):
         gap = sz("card_sub")[0] * 0.4
         rows, w, h = rows + [("", "en", 1, (0, 0, 0), gap)] + srows, max(w, sw), h + gap + sh
     pos = it.get("pos", "bottom")
-    y = 150 if pos == "top" else 540 - h / 2 if pos == "center" else min(740, 1080 - 190 - h)   # 底部时给字幕留位置
-    P.rect((960 - w / 2 - 40, y - 28, 960 + w / 2 + 40, y + h + 30), 20, (18, 20, 24), 170 * a)
-    draw_rows(P, rows, 0, y, a, center=960)
+    top, bot = margins()
+    y = (top + 100 if pos == "top" else DH / 2 - h / 2 if pos == "center"
+         else min(DH * 0.685, DH - bot - 120 - h))                  # 底部时给字幕留位置
+    P.rect((DW / 2 - w / 2 - 40, y - 28, DW / 2 + w / 2 + 40, y + h + 30), 20, (18, 20, 24), 170 * a)
+    draw_rows(P, rows, 0, y, a, center=DW / 2)
 
 def draw_note(P, it, a):
     rows, w, h = block(P, it["zh"], it["en"], "note", "zh", "en", (255, 255, 255), (220, 224, 230))
-    y = 1080 - 70 - h
-    P.rect((960 - w / 2 - 34, y - 20, 960 + w / 2 + 34, y + h + 14), 16, (18, 20, 24), 175 * a)
-    draw_rows(P, rows, 0, y, a, center=960)
+    y = DH - margins()[1] - h
+    P.rect((DW / 2 - w / 2 - 34, y - 20, DW / 2 + w / 2 + 34, y + h + 14), 16, (18, 20, 24), 175 * a)
+    draw_rows(P, rows, 0, y, a, center=DW / 2)
 
 OFF = {"right": (150, -110), "left": (-150, -110), "up": (0, -170), "down": (0, 150)}
 
@@ -165,7 +179,7 @@ def draw_callout(P, it, a, fr):
     x, y, front = it["track"][str(fr)]
     if not front:
         return
-    px, py = x * 1920, y * 1080
+    px, py = x * DW, y * DH
     rows, w, h = block(P, it["zh"], it["en"], "callout")
     pad = 16
     dx, dy = OFF[it["side"]]
@@ -177,8 +191,9 @@ def draw_callout(P, it, a, fr):
         bx, by = px - w / 2 - pad, py + dy - h - pad
     else:
         bx, by = px - w / 2 - pad, py + dy
-    bx = min(max(bx, 30), 1920 - 30 - w - 2 * pad)
-    by = min(max(by, 150), 1080 - 200 - h - pad)
+    top, bot = margins()
+    bx = min(max(bx, 30), DW - 30 - w - 2 * pad)
+    by = min(max(by, top + 100), DH - bot - 130 - h - pad)
     cx = min(max(px, bx), bx + w + 2 * pad)          # 引线连到标签边上离锚点最近的点
     cy = min(max(py, by), by + h + pad)
     P.line((px, py), (cx, cy), INK, 3, a)
@@ -204,7 +219,9 @@ def merge_steps(items):
 
 
 def prepare(tl):
-    """应用字号设置和语言模式，合并相邻的同一标题"""
+    """应用画幅、字号设置和语言模式，合并相邻的同一标题"""
+    global DW, DH
+    DW, DH = tl.get("design", (1920, 1080))
     SCALE.update(tl.get("text", {}))
     if tl.get("lang") == "en":   # 纯英文：英文升为主行，用英文字体，不留空的第二行
         ALIAS.update(zh="en", zh_b="en_b")
@@ -222,7 +239,7 @@ def text_report(out):
     tl = json.load(open(os.path.join(out, "timeline.json"), encoding="utf-8"))
     en_mode, fps, limit = tl.get("lang") == "en", tl["fps"], tl.get("max_words")
     items = prepare(tl)
-    P = Painter(1920, 1080)
+    P = Painter(DW, DH)
     kinds = {"step": "step", "card": "card", "note": "note", "callout": "callout"}
     cuts = sorted({it["frames"][0] for it in items} | {it["frames"][1] + 1 for it in items})
     segs = []
@@ -254,6 +271,8 @@ def text_report(out):
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines))
     say(f"text: {path}（{len(segs)} 屏{f'，{over} 屏超过 {limit} 个英文单词' if over else ''}）")
+    if over:
+        say(f"警告：{over} 屏英文超过 {limit} 个单词，打开 text.md 搜「超过上限」看是哪几屏")
     return over
 
 

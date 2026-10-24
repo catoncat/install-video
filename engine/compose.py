@@ -1,5 +1,5 @@
-"""合成（在 Blender 里运行，不需要 ffmpeg）：渲染帧 + 字幕层 + 音乐 → out/<档位>[_<shots>].mp4，
-再按 shot 生成关键帧拼图 out/review/<shot>.jpg，供 agent 自查。
+"""合成（在 Blender 里运行，不需要 ffmpeg）：渲染帧 + 字幕层 + 音乐 → out/<画幅>/<档位>_<画幅>[_<shots>].mp4，
+各个版本（VERSIONS）→ ..._<版本>.mp4；再按 shot 生成关键帧拼图 out/<画幅>/review/<shot>.jpg，供 agent 自查。
 
 音乐：产品目录下有 music.*（mp3/wav/m4a/ogg）就用它，没有就用 music.py 程序合成。
 """
@@ -11,6 +11,7 @@ from .log import say
 
 
 def compose(out, product_dir):
+    """全片 + 各个版本（VERSIONS）都从同一批渲染帧合成，不重新渲染"""
     tl = json.load(open(os.path.join(out, "timeline.json"), encoding="utf-8"))
     files = sorted(glob.glob(os.path.join(out, "frames", "f_*.png")))
     if not files:
@@ -18,12 +19,34 @@ def compose(out, product_dir):
     nums = [int(os.path.basename(f)[2:-4]) for f in files]
     step = nums[1] - nums[0] if len(nums) > 1 else 1
     fps = round(tl["fps"] / step)
+    music_file = next(iter(sorted(glob.glob(os.path.join(product_dir, "music.*")))), None)
+
+    video = encode(out, tl, files, fps, tl.get("name", "video"), music_file)
+    review(out, tl, video, nums)
+    report_modules(tl, [s["id"] for s in tl["shots"]], "全片")
+
+    by_shot = {s["id"]: s for s in tl["shots"]}
+    for key, v in tl.get("versions", {}).items():
+        if v["shots"] is None:             # 全片本身（只渲了部分 shot 时不检查时长）
+            if not tl.get("shots_arg"):
+                check_target(key, len(files) / fps, v["target"])
+            continue
+        ids = [sid for sid in by_shot if any(sid.startswith(p) for p in v["shots"])]
+        want = [n for sid in ids for n in nums if by_shot[sid]["start"] <= n <= by_shot[sid]["end"]]
+        rendered = {sid for sid in by_shot if any(by_shot[sid]["start"] <= n <= by_shot[sid]["end"] for n in nums)}
+        if not ids or not set(ids) <= rendered:
+            say(f"版本 {key}：这次没有渲染到它用的全部 shot，跳过（出全片时会合成）")
+            continue
+        sub = [files[nums.index(n)] for n in want]
+        encode(out, tl, sub, fps, f"{tl.get('name', 'video')}_{key}", music_file)
+        check_target(key, len(sub) / fps, v["target"])
+        report_modules(tl, ids, f"版本 {key}")
+
+
+def encode(out, tl, files, fps, name, music_file=None):
+    """帧序列 + 对应的字幕层 + 音乐 → out/<name>.mp4，并核对尺寸、帧数、帧率"""
     dur = len(files) / fps
-
-    track = next(iter(sorted(glob.glob(os.path.join(product_dir, "music.*")))), None)
-    if track is None:
-        track = music.generate(os.path.join(out, "music.wav"), dur + 0.5, **tl.get("music", {}))
-
+    track = music_file or music.generate(os.path.join(out, f"music_{name}.wav"), dur + 0.5, **tl.get("music", {}))
     w, h = tl["size"]
     sc = bpy.data.scenes.get("COMPOSE") or bpy.data.scenes.new("COMPOSE")
     r = sc.render
@@ -34,8 +57,8 @@ def compose(out, product_dir):
     for s in list(strips):
         strips.remove(s)
 
-    def seq(name, folder, channel):
-        st = strips.new_image(name, os.path.join(out, folder, os.path.basename(files[0])), channel, 1, fit_method="FIT")
+    def seq(label, folder, channel):
+        st = strips.new_image(label, os.path.join(out, folder, os.path.basename(files[0])), channel, 1, fit_method="FIT")
         for f in files[1:]:
             st.elements.append(os.path.basename(f))
         if hasattr(st, "transform") and "BOX" in [i.identifier for i in st.transform.bl_rna.properties["filter"].enum_items]:
@@ -60,7 +83,7 @@ def compose(out, product_dir):
     ff.format, ff.codec = "MPEG4", "H264"
     ff.constant_rate_factor, ff.ffmpeg_preset = "HIGH", "GOOD"
     ff.audio_codec, ff.audio_bitrate, ff.audio_channels, ff.audio_mixrate = "AAC", 192, "STEREO", 44100
-    video = os.path.join(out, tl.get("name", "video") + ".mp4")     # 按档位和 shot 命名，小样不会覆盖全片
+    video = os.path.join(out, name + ".mp4")
     if os.path.exists(video):
         os.remove(video)
     r.filepath = video
@@ -68,7 +91,27 @@ def compose(out, product_dir):
     bpy.ops.render.render(animation=True, scene=sc.name)
     check(video, (w, h), last, fps)
     say(f"video: {video}  ({w}x{h}, {dur:.1f}s @ {fps}fps, music: {os.path.basename(track)})")
-    review(out, tl, video, nums)
+    return video
+
+
+def check_target(key, dur, target):
+    if target and not target[0] <= dur <= target[1]:
+        say(f"警告：版本 {key} 时长 {dur:.1f}s，不在目标 {target[0]}–{target[1]}s 之内")
+
+
+def report_modules(tl, ids, label):
+    """按 shot(module=...) 统计各段时长占比；超过 MODULE_MAX（默认定制选项 ≤ 20%）就警告"""
+    secs = {}
+    for s in tl["shots"]:
+        if s["id"] in ids and s.get("module"):
+            secs[s["module"]] = secs.get(s["module"], 0) + (s["end"] - s["start"] + 1) / tl["fps"]
+    if not secs:
+        return
+    total = sum((s["end"] - s["start"] + 1) / tl["fps"] for s in tl["shots"] if s["id"] in ids)
+    say(f"{label}各段占比：" + "，".join(f"{k} {v / total:.0%}" for k, v in secs.items()))
+    for k, lim in tl.get("module_max", {}).items():
+        if secs.get(k, 0) / total > lim:
+            say(f"警告：{label}里 {k} 占 {secs[k] / total:.0%}，超过上限 {lim:.0%}")
 
 
 def check(video, size, frames, fps):
