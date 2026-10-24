@@ -1,6 +1,11 @@
 """国际站营销视频分镜模板（video init 默认生成）。
 
-结构：开场标题 → Step 1–8 安装 → Customizable Options（≤ 20%）→ 应用场景 → 询盘结尾。
+按用途出 3 条片子，每条有自己的画幅和镜头顺序（VERSIONS），不是同一条片子换尺寸：
+  main   16:9，45–60 s：国际站主图视频。开场标题 → Step 1–8 安装 → Customizable Options（≤ 20%）→ 应用场景 → 询盘
+  detail 1:1，25–35 s：详情页。精简的安装过程 + 卖点
+  ad     9:16，12–16 s：广告素材。开头 2–3 秒先放最抓眼的画面（钩子），近景快切，结尾询盘
+方屏 / 竖屏的机位由引擎按主体自动重新构图；想专门设计的镜头用 cam(..., fmt={"9:16": dict(...)})，或者写只给某个
+版本用的镜头 shot(..., only=["ad"])。
 模板先用示例模型（快拼箱）跑通，改成自己的产品时：换掉 model.py，把下面的对象名、选择器、机位、字幕换掉。
 字幕默认纯英文、每屏 ≤ 8 个英文单词；中文那一栏也照填，方便和用户核对。
 """
@@ -9,16 +14,15 @@ from engine import geo, library
 from . import model as m
 
 # ---------------- 输出设置 ----------------
-FORMATS = ["16:9", "1:1", "9:16"]          # draft / preview 只出第一个；final 出全部
 LANG = "en"
 MAX_WORDS = 8                              # 每屏（标题 + 字幕 + 标注同时可见的）英文单词上限
-VERSIONS = {                               # 同一批渲染帧剪出三个版本，不重新渲染
-    "60s": dict(shots=None, target=(45, 60)),
-    "30s": dict(shots=["00", "02", "03", "04", "06", "09a", "11a"], target=(25, 35)),
-    "15s": dict(shots=["00", "03", "04", "11a"], target=(12, 18)),
+VERSIONS = {                               # 每条片子：画幅、用到的 shot（按这个顺序，id 前缀）、目标时长
+    "main": dict(format="16:9", shots=None, target=(45, 60)),                                   # 不写 shots：全部（除了 only 别的版本的）
+    "detail": dict(format="1:1", shots=["00", "01", "02", "03", "04", "05", "09a", "11a"], target=(25, 35)),
+    "ad": dict(format="9:16", shots=["ad_hook", "04", "08", "11b"], target=(12, 16)),           # 钩子在前
 }
 # TEXT = dict(card=1.2, note=1.2)          # 手机上看嫌字小就放大
-# FORMAT_ZOOM = {"1:1": 1.15, "9:16": 1.3}  # 方屏 / 竖屏推近多少
+# FIT = {"9:16": dict(boost=1.35, max_w=0.92, max_h=0.60)}   # 竖屏主体放多大（宽度倍数、宽高上限）
 
 # ---------------- 选择器（按自己的模型改） ----------------
 FULL = ["@00_ground", "@01_foundation", "@02_floor_frame", "@03_floor_deck", "@04_posts", "@05_roof_frame",
@@ -47,6 +51,12 @@ def step(n, zh, en, dur, **kw):
 
 
 SHOTS = [
+    # ---------------- 只给广告用：开头钩子（最抓眼的画面先上，近景快切） ----------------
+    shot("ad_hook", 3, title=("拼装式集装箱房", "Detachable Container House"), subtitle=("快速安装", "Fast Installation"),
+         card=True, module="intro", only=["ad"], show=[x for x in FULL if x not in ("@06_walls", "@07_door_window", "@08_trim")],
+         cam=cam(CENTER, az=(-55, -25), el=16, dist=(9, 10.5)),
+         do=[move(["@06_walls", "@07_door_window"], 0.2, 0.9, out=1.2, stagger=0.03, hl=False)]),
+
     shot("00_title", 4, title=("拼装式集装箱房", "Detachable Container House"),
          subtitle=("快速安装 · 平板包装 · 模块化", "Fast Installation · Flat Pack"), card=True,
          module="intro", show=FULL, cam=cam((0, 0, 2.2), az=(-40, -25), el=14, dist=(13, 11.5))),   # 注视点抬高，箱体在画面下半部，标题在上
@@ -116,4 +126,5 @@ SHOTS = [
 
     shot("11b_cta", 2.5, title=("联系我们获取目录和报价", "Contact Us for Catalog & Price"), card=True,
          module="cta"),
+
 ]

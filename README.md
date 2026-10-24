@@ -26,7 +26,7 @@ git clone https://github.com/catoncat/install-video <任意目录>/install-video
 
 ```
 video init <工作目录>/<产品名>          新建产品（国际站营销模板；加 kpx2 是说明版示例）
-video make <产品目录> draft|preview|final [shot前缀]
+video make <产品目录> preview|final [shot前缀] [--version main|detail|ad]
 ```
 
 状态：v0.1，正在快速迭代。

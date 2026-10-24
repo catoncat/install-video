@@ -5,12 +5,12 @@
 ```
 <产品>/
   model.py      必需：build() 建模
-  shots.py      必需：SHOTS 分镜；FORMATS / VERSIONS / LANG / MAX_WORDS / TEXT / MUSIC / STYLE / FORMAT_ZOOM 和 prepare() 可选
+  shots.py      必需：SHOTS 分镜；VERSIONS / LANG / MAX_WORDS / TEXT / MUSIC / STYLE / FIT / FORMATS 和 prepare() 可选
   music.mp3     可选：指定背景音乐，不放就用程序合成
   photos/       可选：应用场景照片（photo() 用）
-  out/<画幅>/   自动生成，每个画幅一个目录（16x9 / 1x1 / 9x16）：frames/ overlay/ review/ timeline.json log.txt text.md
-                <档位>_<画幅>[_<shots>].mp4（如 draft_16x9.mp4、final_9x16_03b.mp4，小样不会覆盖全片）
-                <档位>_<画幅>_<版本>.mp4（VERSIONS 里每个剪出来的版本，如 final_16x9_30s.mp4）
+  out/<版本>/   自动生成，每条片子一个目录（如 main / detail / ad）：frames/ overlay/ review/ timeline.json log.txt text.md
+                <档位>_<版本>[_<shots>].mp4（如 preview_ad.mp4、final_main_03b.mp4，小样不会覆盖全片）
+                （老写法 FORMATS 时是 out/<画幅>/<档位>_<画幅>[_<版本>].mp4）
 ```
 两个文件都是普通 Python。积木不够用时，直接写 bpy 代码。
 
@@ -51,7 +51,7 @@
 | 积木 | 说明 |
 |---|---|
 | `shot(id, dur, title=(中,英), step=None, card=False, card_pos="auto", subtitle=None, show=None, hide=(), cam=None, do=(), notes=(), callouts=(), module=None)` | `show`：开头可见的内容，不给就沿用上一个 shot 结束时的状态。`hide`：只在本 shot 内临时隐藏（做透视用）。`step`：左上角的步骤编号。`card`：标题居中显示（片头、片尾），`card_pos="auto"`（默认）按主体在画面里的位置选上 / 下方，还挡着就自动拉远、平移机位让开，仍超过 10% 才警告；也可以指定 top / center / bottom，`subtitle=(中, 英)` 是卡片第二行小字（纯英文模式也有）。`cam=None` 时沿用上一个机位。`module`：属于哪一段（intro / install / options / scenes / cta），出片时统计各段占比 |
-| `cam(target, az=, el=, dist=, lens=35, target_end=None, fmt=None)` | **建议用关键字写**（`cam(C, az=-40, el=20, dist=12)`），四个数挤在一起容易看错。相机绕 target（选择器或坐标）转。相机跑到地面以下会警告。az 是方位角（0° 在 -Y 正前方，逆时针为正），el 是俯仰角，单位都是度；dist 是距离，单位米。给 `(起, 止)` 就平滑过渡。选择器按零件的**静止位置**取中心，和动画进行到哪无关。`fmt={"9:16": dict(dist=14, el=20)}` 单独调某个画幅的机位 |
+| `cam(target, az=, el=, dist=, lens=35, target_end=None, fmt=None, subject=None, fit=True)` | **建议用关键字写**（`cam(C, az=-40, el=20, dist=12)`），四个数挤在一起容易看错。相机绕 target（选择器或坐标）转。相机跑到地面以下会警告。az 是方位角（0° 在 -Y 正前方，逆时针为正），el 是俯仰角，单位都是度；dist 是距离，单位米。给 `(起, 止)` 就平滑过渡。选择器按零件的**静止位置**取中心，和动画进行到哪无关。`fmt={"9:16": dict(dist=14, el=20)}` 单独调某个画幅的机位（给了 dist / lens 就不再自动构图）。方屏、竖屏**按主体自动构图**：主体是 `subject`（选择器），不给时 target 是选择器就用 target，否则用本镜头里可见的零件和复制品；`fit=False` 关掉，见下面 `FIT` |
 | `move(sel, at, dur, frm=(0,0,0), to=(0,0,0), out=None, spin=0, stagger=0, hl=None, exit=False, relative="rest")` | 从"基准 + frm"移到"基准 + to"。基准默认是静止位置；`relative="current"` 时是对象当前的动画位置（折叠状态下整体吊装：`drop(UNIT, 0.3, 2.4, h=3.5, relative="current")`）。原本不可见的对象，在移动开始时出现。`exit=True` 表示移完后隐藏。装上去的零件默认高亮 |
 | `set_pose(name, at=0, sel=None)` | 硬切到 model.py 里登记的姿态（`"rest"` 是装好后的静止姿态）。sel 不给就是登记了该姿态的全部对象 |
 | `to_pose(name, at, dur, sel=None, stagger=0, hl=None)` | 从当前姿态动画过渡到 name，沿登记的转动路径走（弧线）。`to_pose("rest", 1, 2, sel="roof_wing_*")` 就是"屋顶翼板展开"；`to_pose("folded", ...)` 折回去。当前姿态不在路径上时退化成直线 + 球面插值 |
@@ -68,9 +68,17 @@
 | 普通函数 `fn(ctx)` 放进 `do` | 自定义动画，见下面"写自定义动画" |
 
 `TEXT = dict(card=1.5, note=1.2)`：按类型放大文字（step 步骤标题、card 居中卡片及其副标题、note 底部字幕、callout 标注），手机竖屏观看时常用。一行放不下会自动折行（最多两行），还放不下就缩小字号，并在输出里提示是哪条文字。
-`FORMATS = ["16:9", "1:1", "9:16"]`：要出的画幅（默认三种）。draft / preview 默认只出第一个，final 出全部，`--format 9:16` / `--format all` 指定。设计尺寸短边都是 1080，所以字在各画幅里一样大；相机按水平视野对齐，竖屏、方屏上下多出空间。
-`FORMAT_ZOOM = {"1:1": 1.15, "9:16": 1.3}`：方屏 / 竖屏相对 16:9 推近多少（乘到镜头焦距上）。单个镜头用 `cam(..., fmt=...)` 覆盖。
-`VERSIONS = {"60s": dict(shots=None, target=(45, 60)), "30s": dict(shots=["00", "03", ...], target=(25, 35)), ...}`：从同一批渲染帧剪出多个版本，`shots` 是 shot id 前缀列表（按时间线顺序拼接），`None` 表示全片；`target` 给了就核对时长。也可以直接写 `"30s": ["00", "03"]`。只渲了部分 shot 时，用不全的版本会跳过。
+`VERSIONS`：**按用途出片**（营销默认）——每条片子有自己的画幅和镜头顺序：
+```python
+VERSIONS = {
+    "main":   dict(format="16:9", shots=None, target=(45, 60)),                # 主图视频：全部镜头（only 别的版本的除外）
+    "detail": dict(format="1:1",  shots=["00", "01", "02", "03", "09a", "11a"], target=(25, 35)),
+    "ad":     dict(format="9:16", shots=["ad_hook", "04", "09a", "11b"], target=(12, 16)),   # 钩子在前
+}
+```
+`shots` 是 shot id 前缀列表，**按列表顺序**拼（可以重排；一个前缀匹配多个 shot 时按原顺序），`None` 表示"没写 `only` 或 `only` 含本版本"的全部 shot。只给某些版本用的镜头写 `shot(..., only=["ad"])`。重排或跳过之后，接在"不是原来前一个 shot"后面的镜头，开头的显隐和姿态（含 `set_pose` 的折叠状态、吊在空中等）会自动按完整顺序里的样子摆好（摘要里会提示）；自定义函数做的事不在此列。每条片子单独渲染、单独出自查图和时长 / 占比检查；画幅和镜头完全一样的两条只渲一次。`--version ad` 只做一条。
+老写法（不写 `format`）：`FORMATS = [...]` 按画幅渲染全片，`VERSIONS = {"30s": [...]}` 从同一批帧剪版本，照样可用（说明版示例 kpx2 用的就是它）。
+`FIT = {"9:16": dict(boost=1.35, max_w=0.92, max_h=0.60), "1:1": dict(boost=1.15, max_w=0.92, max_h=0.80)}`：方屏 / 竖屏按主体构图的参数。先量主体在分镜写的 16:9 机位里占画面多宽，换画幅时沿同一视线推近或拉远，让宽度占比放大 `boost` 倍，但不超过画面宽度的 `max_w`，高度不超过 `max_h`（给顶部标题、底部字幕留位置），不会裁到主体。16:9 里本来就是裁切的特写不动。量不到主体时退回 `FORMAT_ZOOM`（固定推近倍数）。
 `MODULE_MAX = {"options": 0.2}`：各段时长占比上限，超过就警告（默认定制选项 ≤ 20%）。
 `MAX_WORDS = 8`：每屏（同时可见的标题 + 字幕 + 标注）英文单词上限，默认 8；`None` 不检查。出片和 `video text` 都会标出超过的那几屏。
 `LANG = "en"`：纯英文字幕（英文升为主行，用英文字体），默认就是 `"en"`；说明版用 `"zh+en"` 中英双语。字幕的中文那一栏照样要填，方便和用户核对。
@@ -175,9 +183,10 @@ SHOTS = [
 
 | 档位 | 输出分辨率 | 帧 | 采样 | 用途 |
 |---|---|---|---|---|
-| draft | 480×270（竖屏 270×480，方屏 270×270） | 隔帧 | 8 | 快速检查全片结构 |
-| preview | 960×540（竖屏 540×960，方屏 540×540） | 隔帧 | 16 | 检查细节、给用户看 |
-| final | 1920×1080（竖屏 1080×1920，方屏 1080×1080） | 逐帧 | 8 | 成片 |
+| preview | 960×540（竖屏 540×960，方屏 540×540） | 逐帧 30fps | 16 | agent 用 `--shots` 只出改过的几个镜头自查；完整出一遍给用户看 |
+| final | 1920×1080（竖屏 1080×1920，方屏 1080×1080） | 逐帧 30fps | 8 | 成片，用户点头后再出 |
+
+旧档位名 `draft` 照样能用，按 preview 出（会提示一行）。
 
 所有档位都按 2 倍分辨率渲染，合成时再缩小（超采样，`scene.SS`）。描边是对法线、深度、零件编号做边缘检测得到的，必须超采样才会细而直、逐帧不闪；超采样后每个输出像素已有 4 倍样本，采样数可以低一些。
 噪点主要来自面光的软阴影：补光灯面保持在 3 m 左右，并设置 `shadow_ray_count=2`。灯面调大会重新出现颗粒感。
@@ -186,10 +195,10 @@ SHOTS = [
 
 ## 输出和自查
 
-- `make` 默认只显示摘要（时间线、渲染耗时、合成结果、各版本时长、各段占比、review 路径、警告和提示），Blender 的逐帧日志写进 `out/<画幅>/log.txt`。加 `-v` 或设 `VIDEO_VERBOSE=1` 显示完整输出。出错时会打印日志的最后 30 行。
+- `make` 默认只显示摘要（时间线、渲染耗时、合成结果、各版本时长、各段占比、review 路径、警告和提示），Blender 的逐帧日志写进 `out/<版本>/log.txt`。加 `-v` 或设 `VIDEO_VERBOSE=1` 显示完整输出。出错时会打印日志的最后 30 行。
 - 每次出片后自动核对：视频尺寸、帧数、帧率要和时间线一致；review 截图不能是纯色帧，整条视频截到的帧不能完全一样。不通过就报错退出（review 图照样会生成，方便查原因）。单个 shot 的几张截图完全一样只提醒，因为可能是静止镜头。
-- `video text <产品目录>` 按时间列出每一屏同时出现的文字、英文单词数、按当前字号算的宽度，写到 `out/<画幅>/text.md`。合成时也会自动生成并警告超过 `MAX_WORDS` 的屏。
-- draft 的 review 拼图用内部 2 倍分辨率的渲染帧（960 宽）叠字幕层，特写里的小零件也看得清；纯色帧 / 全部相同的自查仍然用从成片里截的帧。
+- `video text <产品目录>` 按时间列出每一屏同时出现的文字、英文单词数、按当前字号算的宽度，写到 `out/<版本>/text.md`。合成时也会自动生成并警告超过 `MAX_WORDS` 的屏。
+- 成片宽度不到 960（方屏、竖屏的 preview）时，review 拼图用内部 2 倍分辨率的渲染帧叠字幕层，特写里的小零件也看得清；纯色帧 / 全部相同的自查仍然用从成片里截的帧。
 - `video check <产品目录> [帧号...]`：穿模检查。抽查（默认每 6 帧）不在静止位置的零件（正在动或处于折叠等姿态）和别的 stage 的零件网格是否相交，按 stage 两两归组报告，附 shot 和帧范围。设计上贴在一起的加 `touch_ok`。
 - `video swatch [产品目录]`：材料库全部预设（给了产品目录再加上产品自己的材质、变体）在标准灯光下逐个渲染，拼成带名字的色卡 `out/swatch.jpg`。挑定制饰面时先看它：浅色在主光下会被提亮，两种饰面要拉开差别才看得出切换。
 - `video compose <产品目录>` 会先按上次的档位重新导出时间线（所以改了字幕、`MAX_WORDS`、`VERSIONS` 都会生效），再重做字幕层、合成和各版本，不重新渲染。改了动画、机位、模型就要重新 `make`。
@@ -208,5 +217,5 @@ exec(open(p).read(), g); g["main"](["<产品目录>", "--no-render"])
 - `选择器 'xxx' 没有匹配任何对象`：看报错里列出的相近名字，或者检查 stage 名有没有拼错。
 - 字体缺失：设置 `OVERLAY_ZH` / `OVERLAY_ZH_BOLD` / `OVERLAY_EN` / `OVERLAY_EN_BOLD`，格式是 `"字体路径:索引"`。
 - Windows 上找不到 Blender：设置 `BLENDER=C:\...\blender.exe`。
-- 渲染太慢：先用 draft 或只出部分 shot，成片放到后台跑。改了材质后的第一次渲染要编译着色器，会明显慢一些，这是正常的。
+- 渲染太慢：自查时只出改过的几个 shot（`video make <产品> preview 03,04`），成片放到后台跑。改了材质后的第一次渲染要编译着色器，会明显慢一些，这是正常的。
 - 画面有颗粒：检查是不是加了很大的面光，或者把档位采样调低了。
