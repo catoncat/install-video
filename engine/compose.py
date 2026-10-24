@@ -5,8 +5,9 @@
 """
 import os, glob, json
 import bpy
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageChops, ImageStat
 from . import music, overlay
+from .log import say
 
 
 def compose(out, product_dir):
@@ -66,7 +67,7 @@ def compose(out, product_dir):
     r.use_file_extension = False
     bpy.ops.render.render(animation=True, scene=sc.name)
     check(video, (w, h), last, fps)
-    print(f"video: {video}  ({w}x{h}, {dur:.1f}s @ {fps}fps, music: {os.path.basename(track)})")
+    say(f"video: {video}  ({w}x{h}, {dur:.1f}s @ {fps}fps, music: {os.path.basename(track)})")
     review(out, tl, video, nums)
 
 
@@ -98,6 +99,7 @@ def review(out, tl, video, nums, per=6, tw=640):
         if have:
             picks[s["id"]] = (s, [have[round(i * (len(have) - 1) / max(1, per - 1))] for i in range(min(per, len(have)))])
     grabbed, _ = tools.grab(video, sorted({index[n] for _, ns in picks.values() for n in ns}), os.path.join(rdir, "_tmp"))
+    problems = self_check(tl, picks, {n: grabbed[index[n]] for _, ns in picks.values() for n in ns})
     for sid, (s, ns) in picks.items():
         tiles = []
         for n in ns:
@@ -113,4 +115,25 @@ def review(out, tl, video, nums, per=6, tw=640):
         sheet.save(os.path.join(rdir, f"{sid}.jpg"), quality=85)
     import shutil
     shutil.rmtree(os.path.join(rdir, "_tmp"), ignore_errors=True)
-    print(f"review: {rdir}")
+    say(f"review: {rdir}")
+    if problems:
+        raise RuntimeError("自查没通过（review 图已生成，可以打开看）：\n  " + "\n  ".join(problems))
+
+
+def self_check(tl, picks, paths):
+    """自查截图本身靠不靠得住：截到纯色（全黑 / 全白）的帧算错；整条视频截到的帧完全一样算错
+       （截帧或合成坏了）；单个 shot 的几帧完全一样只提醒（可能是静止镜头）"""
+    small = {n: Image.open(p).convert("L").resize((96, 54)) for n, p in paths.items()}
+    same = lambda a, b: ImageStat.Stat(ImageChops.difference(small[a], small[b])).mean[0] < 0.6
+    problems = []
+    blank = [sid for sid, (_, ns) in picks.items() if any(ImageStat.Stat(small[n]).stddev[0] < 2.0 for n in ns)]
+    if blank:
+        problems.append(f"这些 shot 截到了纯色帧（全黑或全白）：{', '.join(blank)}")
+    ns = sorted(small)
+    if len(ns) > 2 and all(same(ns[0], n) for n in ns[1:]):
+        problems.append("整条视频截到的帧全都一样，截帧或合成出了问题")
+    else:
+        for sid, (s, sn) in picks.items():
+            if (s["end"] - s["start"]) / tl["fps"] > 1.0 and len(sn) > 2 and all(same(sn[0], n) for n in sn[1:]):
+                say(f"提醒：{sid} 的几张截图完全一样，如果这个镜头本该有动作，请检查")
+    return problems

@@ -1,15 +1,18 @@
 """统一入口，运行在 Blender 自带的 Python 里，除 Blender 外不依赖任何软件。
 通过 video.cmd（Windows）或 video.sh（macOS / Linux）调用：
 
-  video setup                                   首次使用：装 Pillow 到 .deps/，检查字体
+  video setup                                   首次使用：装依赖到 .deps/，检查字体，再渲染一个示例镜头自检
   video init <工作目录>/<产品名> [示例名]         从示例复制出一个新产品（默认示例 kpx2）
   video make <产品目录> [draft|preview|final] [shot前缀,...]   渲染 → 字幕层 → 合成 MP4 → 自查拼图
   video compose <产品目录>                      只重做字幕层和合成（改了字幕或音乐，不用重新渲染）
+  video text <产品目录>                         列出每一屏同时出现的文字、英文单词数、宽度（写到 out/text.md）
+  加 -v（或环境变量 VIDEO_VERBOSE=1）显示 Blender 的完整输出；默认只显示摘要，完整日志在 out/log.txt
   video frames <视频文件> [间隔秒数]             参考视频抽帧并生成总览图
   video sheet <图片目录>                        照片总览图（带文件名），方便逐张看
   video pdf <PDF 文件>                          PDF 转成每页图片 + 内嵌原图 + 全文文字，再拼一张总览图
 """
 import sys, os, subprocess, time
+from collections import deque
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEPS = os.path.join(ROOT, ".deps")
@@ -52,14 +55,64 @@ def product_dir(arg):
 
 
 def cmd_setup(_):
-    ensure_deps()
+    """装依赖、查字体和版本，再用示例渲染一个镜头、合成、截图自查，全部通过才打印 SETUP OK"""
+    import shutil, tempfile
+    try:
+        ensure_deps()
+        import bpy
+        from engine import overlay
+        for k, (path, idx) in overlay.FONTS.items():
+            print(f"font {k}: {path} [{idx}]")
+        if bpy.app.version < (4, 4, 0):
+            raise RuntimeError(f"Blender {bpy.app.version_string} 太旧，需要 4.4 以上")
+        print(f"blender {bpy.app.version_string} | python {sys.version.split()[0]}")
+        print("自检：用示例渲染一个镜头（约半分钟）...", flush=True)
+        tmp = tempfile.mkdtemp(prefix="video_selftest_")
+        demo = os.path.join(tmp, "kpx2")
+        shutil.copytree(os.path.join(ROOT, "examples", "kpx2"), demo, ignore=shutil.ignore_patterns("out", "__pycache__"))
+        log = deque(maxlen=30)
+        pr = subprocess.Popen(blender_cmd() + ["make", demo, "draft", "05a"], stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+        for line in pr.stdout:
+            log.append(line.rstrip())
+        if pr.wait() or not os.path.exists(os.path.join(demo, "out", "draft_05a.mp4")) \
+                or not os.path.exists(os.path.join(demo, "out", "review", "05a_post.jpg")):
+            raise RuntimeError("示例渲染自检失败，最后的输出：\n" + "\n".join(log))
+        shutil.rmtree(tmp, ignore_errors=True)
+    except Exception as e:
+        print(f"SETUP FAILED: {e}", flush=True)
+        os._exit(1)            # 直接退出，让这一行就是最后一行（Blender 正常退出还会再打印两行）
+    print("SETUP OK", flush=True)
+    os._exit(0)
+
+
+def blender_cmd():
+    """以后台模式再起一个 Blender 跑本文件的命令前缀"""
     import bpy
-    from engine import overlay
-    for k, (path, idx) in overlay.FONTS.items():
-        print(f"font {k}: {path} [{idx}]")
-    if bpy.app.version < (4, 4, 0):
-        raise SystemExit(f"Blender {bpy.app.version_string} 太旧，需要 4.4 以上")
-    print(f"blender {bpy.app.version_string} | python {sys.version.split()[0]} | ok")
+    return [bpy.app.binary_path, "-b", "--factory-startup", "--python-exit-code", "1", "-P", os.path.abspath(__file__), "--"]
+
+
+def verbose(args):
+    """-v 或 VIDEO_VERBOSE=1：显示完整输出。返回 (是否详细, 去掉 -v 的参数)"""
+    return ("-v" in args or os.environ.get("VIDEO_VERBOSE") == "1"), [a for a in args if a != "-v"]
+
+
+def run_logged(cmd, log, loud):
+    """跑子进程：完整输出追加到 log；终端只显示 say() 打印的摘要行（loud 时全部显示）。失败时打印最后 30 行"""
+    from engine.log import PREFIX
+    tail = deque(maxlen=30)
+    with open(log, "a", encoding="utf-8") as fh:
+        pr = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                              errors="replace")
+        for line in pr.stdout:
+            fh.write(line)
+            tail.append(line.rstrip())
+            if loud or line.startswith(PREFIX):
+                print(line, end="", flush=True)
+    if pr.wait():
+        if not loud:
+            print("\n".join(tail))
+        raise SystemExit(f"出错了，完整日志：{log}")
 
 
 def workers():
@@ -80,26 +133,35 @@ def render_argv(args):
     return p, argv
 
 def cmd_make(args):
-    """主进程导出时间线、清空帧目录，再开 N 个 Blender 进程一起渲染"""
+    """主进程导出时间线、清空帧目录，再开 N 个 Blender 进程一起渲染，最后在新进程里合成"""
     ensure_deps()
-    import bpy, shutil
+    import shutil
     from engine import run
+    from engine.log import say
+    loud, args = verbose(args)
     p, argv = render_argv(args)
     t = time.time()
     run.main(argv + ["--no-render"])
     frames = os.path.join(p, "out", "frames")
     shutil.rmtree(frames, ignore_errors=True)
     os.makedirs(frames)
+    log = os.path.join(p, "out", "log.txt")
+    open(log, "w").close()
     n = workers()
-    cmd = [bpy.app.binary_path, "-b", "--factory-startup", "--python-exit-code", "1", "-P", os.path.abspath(__file__), "--"]
-    procs = [subprocess.Popen(cmd + ["worker", f"{i}/{n}", *args], stdout=subprocess.DEVNULL if i else None,
-                              stderr=subprocess.STDOUT) for i in range(n)]
-    if any(pr.wait() for pr in procs):
-        raise SystemExit("渲染进程出错，单独运行 video worker 0/1 <产品> <质量> 可以看到完整报错")
-    print(f"render: {time.time() - t:.0f}s with {n} workers")
+    out_to = None if loud else open(log, "a", encoding="utf-8")
+    procs = [subprocess.Popen(blender_cmd() + ["worker", f"{i}/{n}", *args], stdout=out_to, stderr=subprocess.STDOUT)
+             for i in range(n)]
+    failed = [pr.wait() for pr in procs]
+    if out_to:
+        out_to.close()
+    if any(failed):
+        if not loud:
+            print("".join(deque(open(log, encoding="utf-8", errors="replace"), maxlen=30)))
+        raise SystemExit(f"渲染进程出错，完整日志：{log}")
+    say(f"render: {time.time() - t:.0f}s with {n} workers")
     # 合成放到干净的新进程：本进程已搭过 3D 场景，残留状态会让截帧变黑
-    if subprocess.run(cmd + ["compose", p]).returncode:
-        raise SystemExit("合成出错")
+    run_logged(blender_cmd() + ["compose", p], log, loud)
+    say(f"完整日志：{log}")
 
 def cmd_worker(args):
     """args: <第几个/共几个> <产品> <质量> [shots]"""
@@ -109,7 +171,16 @@ def cmd_worker(args):
     run.main(argv + ["--part", args[0]])
 
 
+def cmd_text(args):
+    ensure_deps()
+    from engine import run, overlay
+    p = product_dir(args[0])
+    run.main([p, "--no-render", "--quality", "draft"])
+    overlay.text_report(os.path.join(p, "out"))
+
+
 def cmd_compose(args):
+    args = verbose(args)[1]
     p = product_dir(args[0])
     ensure_deps()
     from engine import overlay, compose
@@ -152,7 +223,7 @@ def cmd_sheet(args):
 
 def main(argv):
     cmds = {"setup": cmd_setup, "init": cmd_init, "make": cmd_make, "compose": cmd_compose, "frames": cmd_frames, "sheet": cmd_sheet, "pdf": cmd_pdf,
-            "worker": cmd_worker}
+            "worker": cmd_worker, "text": cmd_text}
     if not argv or argv[0] not in cmds:
         print(__doc__)
         sys.exit(1)
