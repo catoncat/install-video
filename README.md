@@ -1,6 +1,6 @@
 # install-video
 
-一个 agent skill：用 Blender 把产品资料做成 3D 安装 / 组装说明视频，带中英双语字幕和程序合成的背景音乐。
+一个 agent skill：用 Blender 把产品资料做成 3D 安装视频。默认产出阿里国际站等 B2B 平台用的营销视频：安装动画 + 定制选项 + 应用场景 + 询盘结尾，英文字幕，16:9 / 1:1 / 9:16 三种画幅，60 / 30 / 15 秒三个版本，程序合成背景音乐。也能做中英双语的安装说明视频。
 由 agent 和用户讨论后编写产品模型与分镜，引擎负责渲染、字幕、合成和自查。
 
 ## 安装
@@ -25,7 +25,7 @@ git clone https://github.com/catoncat/install-video <任意目录>/install-video
 见 [SKILL.md](SKILL.md)（工作流程）和 [reference.md](reference.md)（API）。示例产品在 `examples/kpx2/`（快拼箱 2.0）。
 
 ```
-video init <工作目录>/<产品名>          新建产品
+video init <工作目录>/<产品名>          新建产品（国际站营销模板；加 kpx2 是说明版示例）
 video make <产品目录> draft|preview|final [shot前缀]
 ```
 

@@ -5,10 +5,12 @@
 ```
 <产品>/
   model.py      必需：build() 建模
-  shots.py      必需：SHOTS 分镜；MUSIC / LANG / TEXT / STYLE / MAX_WORDS 可选
+  shots.py      必需：SHOTS 分镜；FORMATS / VERSIONS / LANG / MAX_WORDS / TEXT / MUSIC / STYLE / FORMAT_ZOOM 和 prepare() 可选
   music.mp3     可选：指定背景音乐，不放就用程序合成
-  out/          自动生成：frames/ overlay/ review/ timeline.json music.wav log.txt text.md
-                <档位>[_<shots>].mp4（如 draft.mp4、final_03b.mp4，小样不会覆盖全片）
+  photos/       可选：应用场景照片（photo() 用）
+  out/<画幅>/   自动生成，每个画幅一个目录（16x9 / 1x1 / 9x16）：frames/ overlay/ review/ timeline.json log.txt text.md
+                <档位>_<画幅>[_<shots>].mp4（如 draft_16x9.mp4、final_9x16_03b.mp4，小样不会覆盖全片）
+                <档位>_<画幅>_<版本>.mp4（VERSIONS 里每个剪出来的版本，如 final_16x9_30s.mp4）
 ```
 两个文件都是普通 Python。积木不够用时，直接写 bpy 代码。
 
@@ -43,8 +45,8 @@
 
 | 积木 | 说明 |
 |---|---|
-| `shot(id, dur, title=(中,英), step=None, card=False, card_pos="bottom", subtitle=None, show=None, hide=(), cam=None, do=(), notes=(), callouts=())` | `show`：开头可见的内容，不给就沿用上一个 shot 结束时的状态。`hide`：只在本 shot 内临时隐藏（做透视用）。`step`：左上角的步骤编号。`card`：标题居中显示（片头、片尾），`card_pos` 取 top / center / bottom，`subtitle=(中, 英)` 是卡片第二行小字（纯英文模式也有）。`cam=None` 时沿用上一个机位 |
-| `cam(target, az, el, dist, lens=35, target_end=None)` | 相机绕 target（选择器或坐标）转。az 是方位角（0° 在 -Y 正前方，逆时针为正），el 是俯仰角，单位都是度；dist 是距离，单位米。给 `(起, 止)` 就平滑过渡。选择器按零件的**静止位置**取中心，和动画进行到哪无关 |
+| `shot(id, dur, title=(中,英), step=None, card=False, card_pos="bottom", subtitle=None, show=None, hide=(), cam=None, do=(), notes=(), callouts=(), module=None)` | `show`：开头可见的内容，不给就沿用上一个 shot 结束时的状态。`hide`：只在本 shot 内临时隐藏（做透视用）。`step`：左上角的步骤编号。`card`：标题居中显示（片头、片尾），`card_pos` 取 top / center / bottom，`subtitle=(中, 英)` 是卡片第二行小字（纯英文模式也有）。`cam=None` 时沿用上一个机位。`module`：属于哪一段（intro / install / options / scenes / cta），出片时统计各段占比 |
+| `cam(target, az, el, dist, lens=35, target_end=None, fmt=None)` | 相机绕 target（选择器或坐标）转。az 是方位角（0° 在 -Y 正前方，逆时针为正），el 是俯仰角，单位都是度；dist 是距离，单位米。给 `(起, 止)` 就平滑过渡。选择器按零件的**静止位置**取中心，和动画进行到哪无关。`fmt={"9:16": dict(dist=14, el=20)}` 单独调某个画幅的机位 |
 | `move(sel, at, dur, frm=(0,0,0), to=(0,0,0), out=None, spin=0, stagger=0, hl=None, exit=False)` | 从"静止位置 + frm"移到"静止位置 + to"。原本不可见的对象，在移动开始时出现。`exit=True` 表示移完后隐藏。装上去的零件默认高亮 |
 | `drop(sel, at, dur=1.5, h=1.2)`、`lift(...)` | 从上方落下、往上吊走 |
 | `screw(sel, at, dur=1, dist=0.12, turns=3, stagger=0.08)` | 沿 out 方向一边转一边拧入 |
@@ -52,13 +54,20 @@
 | `copies(sel, spots, at=0, until=None, drop=0, dur=1.2, stagger=0)` | 把 sel 整体复制到 spots（相对偏移的列表）：拼箱、叠箱、货包、营地。集合实例，几乎不占渲染时间。`drop>0` 时从上方落下；`until` 秒消失（可以超出本 shot，不给就留到片尾） |
 | `grow(sel, at, dur=1.5, stagger=0)` | 沿对象的 `grow_axis` 从 0 长到原长，用于打胶、走线。对象原点要放在起点 |
 | `appear(sel, at, hl=0)`、`vanish(sel, at)`、`highlight(sel, at, dur)` | 出现、消失、橙色高亮 |
+| `swap(sel, tag, at, hl=0)` | 把 sel 换成 `geo.variant()` 做好的材质版本 `tag`（`tag=None` 换回原样）。定制选项展示用 |
+| `photo(path, at=0, dur=None, zoom=(1.0, 1.08))` | 全屏照片打底（用户的场景图、实拍图），按画幅铺满、自动裁掉宣传图常见的白边，`zoom` 缓慢推近。只在本 shot 里可见。路径相对产品目录，文件不存在时跳过并警告。常配合 `card=True` 写场景名 |
 | `note(at, dur, 中, 英)` | 底部说明字幕 |
 | `callout(sel, at, dur, 中, 英, side="right")` | 带引线的标注，跟着零件移动。side 取 right、left、up、down |
 | 普通函数 `fn(ctx)` 放进 `do` | 自定义动画，见下面"写自定义动画" |
 
 `TEXT = dict(card=1.5, note=1.2)`：按类型放大文字（step 步骤标题、card 居中卡片及其副标题、note 底部字幕、callout 标注），手机竖屏观看时常用。一行放不下会自动折行（最多两行），还放不下就缩小字号，并在输出里提示是哪条文字。
-`MAX_WORDS = 8`：每屏英文单词上限，`video text` 会标出超过的那几屏。
-`LANG = "en"`：只出英文字幕（英文升为主行，用英文字体）。默认 `"zh+en"`，中英双语。字幕的中文那一栏照样要填，方便和用户核对。
+`FORMATS = ["16:9", "1:1", "9:16"]`：要出的画幅（默认三种）。draft / preview 默认只出第一个，final 出全部，`--format 9:16` / `--format all` 指定。设计尺寸短边都是 1080，所以字在各画幅里一样大；相机按水平视野对齐，竖屏、方屏上下多出空间。
+`FORMAT_ZOOM = {"1:1": 1.15, "9:16": 1.3}`：方屏 / 竖屏相对 16:9 推近多少（乘到镜头焦距上）。单个镜头用 `cam(..., fmt=...)` 覆盖。
+`VERSIONS = {"60s": dict(shots=None, target=(45, 60)), "30s": dict(shots=["00", "03", ...], target=(25, 35)), ...}`：从同一批渲染帧剪出多个版本，`shots` 是 shot id 前缀列表（按时间线顺序拼接），`None` 表示全片；`target` 给了就核对时长。也可以直接写 `"30s": ["00", "03"]`。只渲了部分 shot 时，用不全的版本会跳过。
+`MODULE_MAX = {"options": 0.2}`：各段时长占比上限，超过就警告（默认定制选项 ≤ 20%）。
+`MAX_WORDS = 8`：每屏（同时可见的标题 + 字幕 + 标注）英文单词上限，默认 8；`None` 不检查。出片和 `video text` 都会标出超过的那几屏。
+`LANG = "en"`：纯英文字幕（英文升为主行，用英文字体），默认就是 `"en"`；说明版用 `"zh+en"` 中英双语。字幕的中文那一栏照样要填，方便和用户核对。
+`def prepare():`：模型建好之后、时间线之前调用一次，用来做材质变体等（见下面"材料库和定制选项"）。
 `MUSIC = dict(bpm=96, root=48, seed=1)`：调整合成音乐的速度、调性（MIDI 根音）和随机种子。
 `STYLE = dict(bg=..., floor=..., ambient=..., ambient_strength=..., lines=True, line_color=..., line_opacity=0.75)`：覆盖画面风格，默认值见 `engine/scene.py` 里的 STYLE。背景色只给相机看，环境光单独设置，所以背景可以调得很暗，不会影响照明。
 
@@ -68,6 +77,26 @@
 - 同一步可以拆成几个 shot（特写一个、全景一个），标题保持不变，切镜头时标题不会闪。
 - 镜头之间优先直接切换。在一个 shot 里同时移动注视点又大幅拉远，容易穿过模型。
 - 移动之间零件会保持不动；同一个零件可以在多个 shot 里先后移动，比如先吊走、后面再装回来。
+
+## 材料库和定制选项
+
+`engine/library.py` 有一组程序化材质预设（不需要贴图文件），`library.PRESETS` 列出全部：
+sandwich_white / sandwich_grey（夹芯板）、metal_dark（金属板）、flexible_stone（柔性石材）、soft_stone（软瓷）、cement（水泥质感）、
+wpc_wall（木塑墙板）、spc_oak（SPC 石塑地板）、wpc_floor（木塑地板）、tile（瓷砖）、gypsum（石膏板吊顶）、pvc_ceiling（扣板吊顶）、led_panel（平板灯）。
+用户有材料实拍图时用 `library.mat_image(名字, 路径, scale=每米重复次数)` 当贴图。
+
+```python
+from engine import geo, library
+
+def prepare():
+    geo.variant("@06_walls", "stone", library.material("soft_stone"))    # 墙板复制一份换成软瓷，默认隐藏
+    geo.variant("floor_pvc", "oak", library.material("spc_oak"))
+
+# 分镜里：同一箱体快速切换
+shot("09_options", 4, title=("可定制", "Customizable Options"), module="options",
+     do=[swap("@06_walls", "stone", 0.4), swap("@06_walls", None, 3.0)])
+```
+变体和原件共用网格、放在原件的静止位置，不跟原件的动画；在箱体装好之后的镜头里切换。
 
 ## 写自定义动画
 
@@ -110,9 +139,9 @@ SHOTS = [..., shot("05_panel", 3, do=[raise_panel]), ...]
 
 | 档位 | 输出分辨率 | 帧 | 采样 | 用途 |
 |---|---|---|---|---|
-| draft | 480×270 | 隔帧 | 8 | 快速检查全片结构 |
-| preview | 960×540 | 隔帧 | 16 | 检查细节、给用户看 |
-| final | 1920×1080 | 逐帧 | 8 | 成片 |
+| draft | 480×270（竖屏 270×480，方屏 270×270） | 隔帧 | 8 | 快速检查全片结构 |
+| preview | 960×540（竖屏 540×960，方屏 540×540） | 隔帧 | 16 | 检查细节、给用户看 |
+| final | 1920×1080（竖屏 1080×1920，方屏 1080×1080） | 逐帧 | 8 | 成片 |
 
 所有档位都按 2 倍分辨率渲染，合成时再缩小（超采样，`scene.SS`）。描边是对法线、深度、零件编号做边缘检测得到的，必须超采样才会细而直、逐帧不闪；超采样后每个输出像素已有 4 倍样本，采样数可以低一些。
 噪点主要来自面光的软阴影：补光灯面保持在 3 m 左右，并设置 `shadow_ray_count=2`。灯面调大会重新出现颗粒感。
@@ -121,9 +150,10 @@ SHOTS = [..., shot("05_panel", 3, do=[raise_panel]), ...]
 
 ## 输出和自查
 
-- `make` 默认只显示摘要（时间线、渲染耗时、合成结果、review 路径、警告和提示），Blender 的逐帧日志写进 `out/log.txt`。加 `-v` 或设 `VIDEO_VERBOSE=1` 显示完整输出。出错时会打印日志的最后 30 行。
+- `make` 默认只显示摘要（时间线、渲染耗时、合成结果、各版本时长、各段占比、review 路径、警告和提示），Blender 的逐帧日志写进 `out/<画幅>/log.txt`。加 `-v` 或设 `VIDEO_VERBOSE=1` 显示完整输出。出错时会打印日志的最后 30 行。
 - 每次出片后自动核对：视频尺寸、帧数、帧率要和时间线一致；review 截图不能是纯色帧，整条视频截到的帧不能完全一样。不通过就报错退出（review 图照样会生成，方便查原因）。单个 shot 的几张截图完全一样只提醒，因为可能是静止镜头。
-- `video text <产品目录>` 按时间列出每一屏同时出现的文字、英文单词数、按当前字号算的宽度，写到 `out/text.md`。
+- `video text <产品目录>` 按时间列出每一屏同时出现的文字、英文单词数、按当前字号算的宽度，写到 `out/<画幅>/text.md`。合成时也会自动生成并警告超过 `MAX_WORDS` 的屏。
+- `video compose <产品目录>` 会先按上次的档位重新导出时间线（所以改了字幕、`MAX_WORDS`、`VERSIONS` 都会生效），再重做字幕层、合成和各版本，不重新渲染。改了动画、机位、模型就要重新 `make`。
 
 ## 在打开的 Blender 里实时调试（可选，需要 Blender MCP）
 

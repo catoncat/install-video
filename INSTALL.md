@@ -30,12 +30,12 @@
 
 运行示例：`video make kpx2 draft 05a`（Windows 用 `.\video.cmd`，macOS / Linux 用 `./video.sh`）。
 
-然后**打开并查看** `examples/kpx2/out/review/05a_post.jpg`，检查三点：
+然后**打开并查看** `examples/kpx2/out/16x9/review/05a_post.jpg`，检查三点：
 - 6 张小图各不相同，能看到角柱落下、螺栓拧入的过程；
 - 左上角有步骤标题，底部有中英双语字幕；
 - 画面完整，没有被放大裁切，也不是全黑。
 
-再把 `examples/kpx2/out/draft_05a.mp4` 的位置告诉用户，请用户自己打开看一下。有任何一项不对，就停下来，把情况告诉用户。
+再把 `examples/kpx2/out/16x9/draft_16x9_05a.mp4` 的位置告诉用户，请用户自己打开看一下。有任何一项不对，就停下来，把情况告诉用户。
 
 ## 3. 工作目录
 
