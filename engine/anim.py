@@ -147,7 +147,7 @@ class Timeline:
                 targets = resolve(a["sel"])
                 for i, o in enumerate(targets):
                     at = a["at"] + i * a.get("stagger", 0.0)
-                    entering = o not in state
+                    entering = o not in state and o not in tmp_hidden   # hide 优先于入场
                     if a["kind"] == "move":
                         self._move(ctx, o, a, at)
                         if entering:

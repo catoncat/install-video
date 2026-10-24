@@ -211,10 +211,11 @@ def roof_frame():
         # 灯管真正照亮室内（自发光只会让灯管本身变亮）
         lt = bpy.data.lights.new(f"led_{k}_light", "AREA")
         lt.shape, lt.size, lt.size_y, lt.energy = "RECTANGLE", 1.16, 0.05, 120
+        lt.use_shadow = False      # 室内补光不投影：省阴影缓冲，拼箱时不会爆
         ob = bpy.data.objects.new(f"led_{k}_light", lt)
         ob.location = (x, 0, ROOF_BOT - 0.06)
-        ob["stage"] = st
-        coll(st).objects.link(ob)
+        ob["stage"] = "10_services"   # 接电之后才亮；打包、吊装时不该照亮夹层
+        coll("10_services").objects.link(ob)
     channels(st, ROOF_BOT + 0.0015, up=False)
 
 def channels(stage, z, up):
