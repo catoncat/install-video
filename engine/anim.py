@@ -11,29 +11,40 @@ from . import geo
 
 FPS = 30
 HL_IN, HL_OUT = 0.2, 0.5          # 高亮淡入 / 淡出秒数
-# 非 16:9 画幅的镜头放大倍数（相机按水平视野对齐，竖屏 / 方屏上下空间多，适当推近）。
-# 产品可在 shots.py 写 FORMAT_ZOOM 覆盖，单个镜头用 cam(..., fmt={"9:16": dict(dist=..., lens=...)}) 覆盖
+# 非 16:9 画幅按主体重新构图：沿分镜写的 16:9 视线推近或拉远，让主体宽度占画面宽度的 fill，
+# 高度不超过 max_h（以画面中心为准，上下各留出位置给标题和字幕），产品不会被裁到。
+# 多台箱子的场景（拼箱、营地）太宽，按宽度放进竖屏会很小：允许左右裁掉一些（宽度最多到 crop_w），让高度至少 min_h。
+# 16:9 里本来就是裁切的特写，按固定倍数 FORMAT_ZOOM 推近（和 16:9 的构图一样，只是更近）。
+# 产品可在 shots.py 写 FIT = {"9:16": dict(fill=..., max_h=..., ...)} 覆盖；单个镜头 cam(..., subject=选择器) 指定拍谁，
+# cam(..., fit=False) 关掉，cam(..., fmt={...}) 里给了 dist / lens 就按给的来。
+FIT = {"1:1": dict(fill=0.82, max_h=0.80, crop_w=1.40, min_h=0.62),
+       "9:16": dict(fill=0.90, max_h=0.60, crop_w=1.90, min_h=0.55)}
+# 量不到主体时（比如全是照片、主体在相机后面）退回固定推近倍数
 FORMAT_ZOOM = {"16:9": 1.0, "1:1": 1.15, "9:16": 1.3}
 
 
 # ---------------- 分镜数据构造（只是返回 dict，方便书写） ----------------
 def shot(id, dur, title=None, cam=None, do=(), show=None, hide=(), notes=(), callouts=(), step=None, card=False,
-         card_pos="auto", subtitle=None, module=None):
+         card_pos="auto", subtitle=None, module=None, only=None):
     """title=(中, 英)；show=该 shot 开头可见的选择器（不给则沿用上一个 shot 结束时的状态）；
        hide=只在本 shot 内临时隐藏；step=左上角步骤编号；card=True 时标题居中大字显示（片头片尾），
        card_pos=auto / top / center / bottom：卡片位置，auto 按主体在画面里的位置自动避让（重叠超过 10% 会警告）；
        subtitle=(中, 英) 是卡片的第二行小字。
        module：这个镜头属于哪一段（如 "intro" / "install" / "options" / "scenes" / "cta"），出片时统计各段时长占比。
+       only=["ad"]：只给这些版本用（VERSIONS 里版本的 shots 不写时，默认用"没写 only 或 only 含本版本"的全部 shot）。
        cam=None 时沿用上一个 shot 结束时的机位。"""
     return dict(id=id, dur=dur, title=title, cam=cam, do=list(do), show=show, hide=list(hide),
                 notes=list(notes), callouts=list(callouts), step=step, card=card, card_pos=card_pos, subtitle=subtitle,
-                module=module)
+                module=module, only=list(only) if only else None)
 
-def cam(target, az, el, dist, lens=35, target_end=None, fmt=None):
+def cam(target, az, el, dist, lens=35, target_end=None, fmt=None, subject=None, fit=True):
     """相机围绕 target（选择器或 (x,y,z)）的球坐标。az/el 为度（az=0 在 -Y 正前方，逆时针为正），dist 为米。
        az/el/dist/lens 给 (起, 止) 就在本 shot 内平滑过渡；target_end 让注视点也移动。
-       fmt={"9:16": dict(dist=..., lens=..., el=...)}：某个画幅单独改机位（给了 lens 就不再乘 FORMAT_ZOOM）。"""
-    return dict(target=target, target_end=target_end, az=az, el=el, dist=dist, lens=lens, fmt=fmt or {})
+       fmt={"9:16": dict(dist=..., lens=..., el=...)}：某个画幅单独改机位（给了 dist 或 lens 就不再自动构图）。
+       subject：这个镜头拍谁（选择器），方屏 / 竖屏按它重新构图；不给时，target 是选择器就用 target，
+       否则用本镜头里可见的零件和复制品（不含地面类大物体）。fit=False：方屏 / 竖屏不自动构图（退回固定推近倍数）。"""
+    return dict(target=target, target_end=target_end, az=az, el=el, dist=dist, lens=lens, fmt=fmt or {},
+                subject=subject, fit=fit)
 
 def move(sel, at, dur, frm=(0, 0, 0), to=(0, 0, 0), out=None, spin=0, stagger=0.0, hl=None, exit=False,
          relative="rest"):
@@ -135,6 +146,9 @@ def pose_tf(o, name, f=1.0):
             loc = loc + Vector(op[1]) * f
     return loc, rot
 
+def _is_point(t):
+    return isinstance(t, (tuple, list)) and len(t) == 3 and all(isinstance(v, (int, float)) for v in t)
+
 def rest_matrix(o):
     """静止姿态的世界矩阵（建时间线时记下的位置和旋转），不受动画当前状态影响"""
     if "rest" not in o:
@@ -197,9 +211,16 @@ class Ctx:
 
 
 class Timeline:
-    def __init__(self, fmt="16:9", zoom=None, base_dir=""):
+    def __init__(self, fmt="16:9", zoom=None, base_dir="", fit=None):
         self.fmt = fmt
         self.zoom = {**FORMAT_ZOOM, **(zoom or {})}.get(fmt, 1.0)
+        self.fit = {**FIT.get(fmt, {}), **(fit or {}).get(fmt, {})} if fmt in FIT else None
+        w, h = (int(v) for v in fmt.split(":"))
+        self.aspect = h / w                # 画面高 / 宽
+        self.copy_spans = []       # [(副本空物体, 出现帧, 消失帧或 None)]，构图时把可见的副本算进主体
+        self.copy_actions = []     # [(copies 动作, 第一个副本出现帧, 消失帧或 None)]，给重排后的版本补复制品
+        self.snap = {}             # shot id -> (开头的可见集合, 开头的姿态 cur)：给重排后的版本复原用
+        self.info = []
         self.base_dir = base_dir           # photo() 相对路径的起点（产品目录）
         self.vis_events = {}       # obj -> [(frame, visible)]
         self.interp = {}           # obj -> {frame: "CONSTANT"/"LINEAR"}：CONSTANT 表示该关键帧之后保持不动
@@ -240,7 +261,9 @@ class Timeline:
                 setattr(o, path, cur)
         self._mark(o, 1, "CONSTANT")
 
-    def build(self, shots):
+    def build(self, shots, canon=None):
+        """canon：完整顺序时间线的快照（另一个 Timeline 的 .snap 和 shot 顺序）。版本重排或删掉了 shot 时，
+           接在"不是原来前一个 shot"后面的 shot，开头的显隐和姿态按完整顺序里它开头时的样子摆好"""
         objs = model_objects()
         for ob in scene_camera():
             ob.animation_data_clear()
@@ -250,16 +273,38 @@ class Timeline:
         for c in [c for c in bpy.data.collections if c.name.startswith("COPIES_")]:
             bpy.data.collections.remove(c)
         for o in objs:
-            o["rest"] = list(o.location)
-            o["rest_rot"] = list(o.rotation_euler)
+            if "rest" not in o:                       # 同一进程里建第二遍（先建完整顺序再建版本）时沿用第一遍的静止姿态
+                o["rest"] = list(o.location)
+                o["rest_rot"] = list(o.rotation_euler)
+            o.location, o.rotation_euler = Vector(o["rest"]), Euler(o["rest_rot"])
             o["hl"] = 0.0
             o.animation_data_clear()
         state = set()
         frame = 1
+        canon_prev = {}
+        if canon:
+            snaps, order = canon
+            canon_prev = {sid: (order[i - 1] if i else None) for i, sid in enumerate(order)}
+        prev_id = None
+        last_cam = None
         for s in shots:
             start, end = frame, frame + round(s["dur"] * FPS)
             ctx = Ctx(start, self, s["dur"])
             ctx.moved = set()
+            if canon and s["id"] in snaps:
+                c_state, c_cur, c_copies, c_cam = snaps[s["id"]]
+                if canon_prev.get(s["id"]) != prev_id and (prev_id or canon_prev.get(s["id"])):
+                    if s["show"] is None:
+                        state = set(c_state)
+                    if s["cam"] is None and c_cam is not None:     # 沿用的是完整顺序里前面镜头的机位
+                        s = {**s, "cam": c_cam}
+                    self._restore(ctx, c_cur)
+                    self.info.append(f"{s['id']}：不是接在原来的前一个 shot 后面，开头的显隐、姿态和复制品已按完整顺序摆好")
+                self._sync_copies(ctx, c_copies, start, end)
+            live = [(a, None if b is None else (b - start) / FPS) for a, f0, b in self.copy_actions
+                    if f0 <= start and (b is None or b > start)]
+            self.snap[s["id"]] = (frozenset(state), {o: dict(c) for o, c in self.cur.items()}, live, last_cam)
+            last_cam = s["cam"] or last_cam
             if s["show"] is not None:
                 state = set(resolve(s["show"]))
             tmp_hidden = set(resolve(s["hide"])) if s["hide"] else set()
@@ -327,10 +372,11 @@ class Timeline:
                         state.discard(o)
                     else:
                         state.add(o)
-            self._camera(ctx, s, start, end)
+            self._camera(ctx, s, start, end, state - tmp_hidden)
             for a in photos:
                 self._photo(ctx, a)
             self.shots.append((s, start, end))
+            prev_id = s["id"]
             frame = end
         self._write_vis()
         paths = ("location", "rotation_euler", "scale")
@@ -349,6 +395,44 @@ class Timeline:
         bpy.context.scene.frame_start = 1
         bpy.context.scene.frame_end = frame - 1
         return self
+
+    def _sync_copies(self, ctx, c_copies, start, end):
+        """复制品（拼箱、营地）按完整顺序对齐：那时在场、这里没有的，本 shot 内补上；这里在场、那时没有的，本 shot 开头藏起来"""
+        want = {a["key"]: (a, left) for a, left in c_copies}
+        have = {a["key"] for a, f0, b in self.copy_actions if f0 <= start and (b is None or b > start)}
+        for key, (a, left) in want.items():
+            if key not in have:
+                dur = (end - start) / FPS
+                self._copies(ctx, {**a, "at": 0.0, "drop": 0.0, "stagger": 0.0,
+                                   "until": dur if left is None else min(left, dur)})
+        live = lambda f0, b: f0 <= start and (b is None or b > start)
+        for i, (e, f0, b) in enumerate(self.copy_spans):
+            if live(f0, b) and e.get("copy_key") not in want:
+                self.vis_events.setdefault(e, []).append((start, False))
+                self.copy_spans[i] = (e, f0, start)
+        for i, (a, f0, b) in enumerate(self.copy_actions):
+            if live(f0, b) and a["key"] not in want:
+                self.copy_actions[i] = (a, f0, start)
+
+    def _restore(self, ctx, c_cur):
+        """硬切到另一条时间线记下的姿态（c_cur：对象 -> 姿态记录）；不在里面的对象回静止姿态"""
+        for o in set(c_cur) | set(self.cur):
+            want = c_cur.get(o)
+            have = self._cur(o)
+            if want is None:
+                if not have["pose"] and (have["loc"] - Vector(o["rest"])).length < 1e-5:
+                    continue
+                loc, e = Vector(o["rest"]), Euler(o.get("rest_rot", (0, 0, 0)))
+                want = dict(pose=None, loc=loc, rot=e.to_matrix(), eul=e)
+            elif (want["loc"] - have["loc"]).length < 1e-5 and want["pose"] == have["pose"]:
+                continue
+            self._ensure_rest(o)
+            want = dict(want)
+            want["eul"] = self._key_tf(o, ctx.start, want["loc"], want["rot"], have["eul"])
+            self._mark(o, ctx.start, "CONSTANT")
+            self.cuts.append((o, ctx.start))
+            self.cur[o] = want
+            o.location, o.rotation_euler = Vector(o["rest"]), Euler(o.get("rest_rot", (0, 0, 0)))
 
     def _pose_targets(self, name):
         if name == "rest":                          # 回到静止：所有当前不在静止姿态的对象
@@ -469,6 +553,8 @@ class Timeline:
 
     def _copies(self, ctx, a):
         """集合实例：每个副本一个空物体，片头起隐藏，at 出现，until 消失"""
+        a = {**a, "key": a.get("key") or str((a["sel"], tuple(a["spots"])))}
+        self.copy_actions.append((a, ctx.f(a["at"]), ctx.f(a["until"]) if a["until"] is not None else None))
         self.n_copies += 1
         name = a["name"] or f"copies{self.n_copies}"
         unit = bpy.data.collections.new("COPIES_" + name)      # 不链接进场景，只给实例引用
@@ -478,6 +564,7 @@ class Timeline:
             e = bpy.data.objects.new(f"{name}_{k}", None)
             bpy.context.scene.collection.objects.link(e)
             e["copies"] = True
+            e["copy_key"] = str(a["key"])
             e.instance_type, e.instance_collection = "COLLECTION", unit
             at = a["at"] + k * a["stagger"]
             for sec, dz in (((at, a["drop"]), (at + a["dur"], 0.0)) if a["drop"] else ((at, 0.0),)):
@@ -488,6 +575,7 @@ class Timeline:
             if a["until"] is not None:
                 ev.append((ctx.f(a["until"]), False))
             self.vis_events.setdefault(e, []).extend(ev)
+            self.copy_spans.append((e, ctx.f(at), ctx.f(a["until"]) if a["until"] is not None else None))
 
     def _swap(self, ctx, a, state):
         """原件和它的各个材质变体之间切换显隐：只显示 tag 指定的那一个"""
@@ -579,7 +667,77 @@ class Timeline:
                     for k in fc.keyframe_points:
                         k.interpolation = "CONSTANT"
 
-    def _camera(self, ctx, s, start, end):
+    def _subject_points(self, c, visible, start, end):
+        """构图用的主体：包围盒角点（静止姿态，世界坐标）；第二个返回值表示里面有没有复制品（多台箱子的场景）"""
+        def ok(o):
+            if o.type != "MESH" or o.get("bg") or "ground" in o.get("stage", "") or "rest" not in o:
+                return False
+            lo, hi = bbox([o], rest=True)
+            return (hi - lo).length <= 25
+        sel = c.get("subject")
+        if sel is None and not _is_point(c["target"]):
+            sel = c["target"]
+        objs = [o for o in resolve(sel)] if sel is not None else [o for o in visible if ok(o)]
+        pts = [rest_matrix(o) @ Vector(k) for o in objs for k in o.bound_box]
+        scene = False
+        if sel is None:                                 # 本镜头里可见的复制品（拼箱、营地）也算主体
+            for e, a, b in self.copy_spans:
+                if a < end and (b is None or b > start):
+                    off = e.location.copy()
+                    more = [off + rest_matrix(o) @ Vector(k) for o in e.instance_collection.objects if ok(o)
+                            for k in o.bound_box]
+                    scene |= bool(more)
+                    pts += more
+        return pts, scene
+
+    def _fit_dist(self, p, dirv, d, pts, lens, sensor, scene=False):
+        """沿视线 dirv 求本画幅的相机距离和注视点上下平移量（见文件开头 FIT 的说明），返回 (距离, 平移向量)"""
+        tanh = sensor / 2 / lens
+        f = -dirv
+        r = f.cross(Vector((0, 0, 1)))
+        r = r.normalized() if r.length > 1e-6 else Vector((1, 0, 0))
+        u = r.cross(f)
+        def ext(dd, aspect, q0=p):
+            """主体相对画面中心的半宽、半高（画面半宽 / 半高为 1），以及上下中点"""
+            C = q0 + dirv * dd
+            hw, ys = 0.0, []
+            for q in pts:
+                v = q - C
+                z = v.dot(f)
+                if z < 0.05:
+                    return None
+                hw = max(hw, abs(v.dot(r)) / (z * tanh))
+                ys.append(v.dot(u) / (z * tanh * aspect))
+            return hw, max(abs(min(ys)), abs(max(ys))), (min(ys) + max(ys)) / 2
+        def closest(wmax, hmax, q0):
+            """最近的距离，使主体半宽 ≤ wmax、半高 ≤ hmax（主体越近越大，单调）"""
+            ok = lambda dd: (lambda e: e is not None and e[0] <= wmax and e[1] <= hmax)(ext(dd, self.aspect, q0))
+            lo, hi = d * 0.2, d * 8
+            if ok(lo):
+                return lo
+            if not ok(hi):
+                return hi
+            for _ in range(24):
+                mid = (lo + hi) / 2
+                lo, hi = (lo, mid) if ok(mid) else (mid, hi)
+            return hi
+        e16 = ext(d, 9 / 16)
+        self._fitlog = (e16,)
+        if e16 is None or e16[0] > 1 or e16[1] > 1:        # 16:9 里本来就是裁切的特写，或主体在身后
+            return d / self.zoom, Vector()
+        F = self.fit
+        def solve(q0):
+            dd = closest(F["fill"], F["max_h"], q0)
+            if scene and ext(dd, self.aspect, q0)[1] < F["min_h"]:    # 场景太扁：左右裁一些，换取高度
+                dd = min(dd, closest(F["crop_w"], F["min_h"], q0))
+            return dd
+        dd = solve(p)
+        e = ext(dd, self.aspect)
+        # 主体在画面里上下居中（16:9 的注视高度换到竖屏 / 方屏常常一头空），再按居中后的位置重新求距离
+        shift = u * (e[2] * dd * tanh * self.aspect) if e else Vector()
+        return solve(p + shift), shift
+
+    def _camera(self, ctx, s, start, end, visible=()):
         c = s["cam"]
         if c is None:
             return
@@ -590,7 +748,10 @@ class Timeline:
         p0 = point(c["target"])
         p1 = point(c["target_end"]) if c["target_end"] is not None else p0
         az, el, di, ln = (pair(c[k]) for k in ("az", "el", "dist", "lens"))
-        if "lens" not in over:                  # 非 16:9 画幅按 FORMAT_ZOOM 推近
+        pts, scene = [], False
+        if self.fit and c.get("fit", True) and "dist" not in over and "lens" not in over:
+            pts, scene = self._subject_points(c, visible, start, end)
+        if not pts and "lens" not in over and self.fmt != "16:9":       # 量不到主体：退回固定推近倍数
             ln = tuple(v * self.zoom for v in ln)
         n = max(1, (end - 1 - start) // 6)
         for k in range(n + 1):
@@ -600,8 +761,12 @@ class Timeline:
             p = p0.lerp(p1, e)
             a, b, d = math.radians(lerp(az)), math.radians(lerp(el)), lerp(di)
             fr = start + round(u * (end - 1 - start))
+            dirv = Vector((math.sin(a) * math.cos(b), -math.cos(a) * math.cos(b), math.sin(b)))
+            if pts:
+                d, shift = self._fit_dist(p, dirv, d, pts, lerp(ln), cam.data.sensor_width, scene)
+                p = p + shift
             tgt.location = p
-            cam.location = p + Vector((math.sin(a) * math.cos(b), -math.cos(a) * math.cos(b), math.sin(b))) * d
+            cam.location = p + dirv * d
             if cam.location.z < -0.15 and s["id"] not in self._below:
                 self._below.add(s["id"])
                 self.warnings.append(f"{s['id']}：相机跑到地面以下（z={cam.location.z:.2f}），检查 cam 的 el（仰角）"
