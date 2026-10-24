@@ -23,7 +23,7 @@ def compose(out, product_dir):
 
     video = encode(out, tl, files, fps, tl.get("name", "video"), music_file)
     review(out, tl, video, nums)
-    report_modules(tl, [s["id"] for s in tl["shots"]], "全片")
+    report_modules(tl, [s["id"] for s in tl["shots"]], f"片子 {tl['version']} " if tl.get("version") else "全片")
 
     by_shot = {s["id"]: s for s in tl["shots"]}
     for key, v in tl.get("versions", {}).items():
@@ -128,7 +128,7 @@ def check(video, size, frames, fps):
 
 def review(out, tl, video, nums, per=6, tw=640):
     """按 shot 各取 per 帧，拼成 3 列：out/review/<shot>.jpg。自查（纯色帧、整条一样）用从成片里截的帧，
-       所以合成、缩放、字幕层的问题都能发现；成片宽度不到 960（draft）时，拼图改用内部渲染的高清帧
+       所以合成、缩放、字幕层的问题都能发现；成片宽度不到 960（方屏、竖屏的 preview）时，拼图改用内部渲染的高清帧
        （2 倍超采样）叠字幕层，特写里的小零件也看得清。"""
     from . import tools
     rdir = os.path.join(out, "review")

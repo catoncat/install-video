@@ -37,9 +37,36 @@ def formats(shots):
     """产品要出的画幅，默认国际站营销三种"""
     return list(getattr(shots, "FORMATS", ["16:9", "1:1", "9:16"]))
 
-def out_dir(product, fmt):
+def out_dir(product, fmt, version=None):
     from engine.scene import tag
-    return os.path.join(os.path.abspath(product), "out", tag(fmt))
+    return os.path.join(os.path.abspath(product), "out", version or tag(fmt))
+
+def use_versions(shots):
+    """按用途出片：VERSIONS 里每个版本写了 format 时，每个版本是一条独立的片子（自己的画幅、自己的镜头顺序），
+       返回 {名: dict(format, shots, target)}；没写 format 时返回 None（老写法：全片按画幅渲染，版本从全片里剪）"""
+    vs = getattr(shots, "VERSIONS", {})
+    if not any(isinstance(v, dict) and v.get("format") for v in vs.values()):
+        return None
+    out = {}
+    for k, v in vs.items():
+        if not (isinstance(v, dict) and v.get("format")):
+            raise ValueError(f"VERSIONS[{k!r}] 要写 format（如 \"9:16\"）：按用途出片时每个版本都要有自己的画幅")
+        out[k] = dict(format=v["format"], shots=v.get("shots"), target=v.get("target"))
+    return out
+
+def version_shots(shots, name, spec):
+    """版本用到的 shot（按版本里写的顺序）：shots=None 时取"没写 only 或 only 含本版本"的全部 shot（原顺序）；
+       写了前缀列表时按列表顺序取，一个前缀匹配多个 shot 时按原顺序。列表里点名的 shot 不受 only 限制"""
+    allshots = shots.SHOTS
+    if spec["shots"] is None:
+        return [s for s in allshots if not s.get("only") or name in s["only"]]
+    seq = []
+    for pre in spec["shots"]:
+        hit = [s for s in allshots if s["id"].startswith(pre) and s not in seq]
+        if not hit:
+            raise ValueError(f"版本 {name}：shot 前缀 {pre!r} 没匹配到任何 shot：{[s['id'] for s in allshots]}")
+        seq += hit
+    return seq
 
 def versions(shots):
     """VERSIONS = {"60s": None, "30s": [shot 前缀...], "15s": dict(shots=[...], target=(12, 18))} 统一成
@@ -197,29 +224,47 @@ def main(argv):
     ap.add_argument("--no-render", action="store_true")
     ap.add_argument("--part", default="", help="并行渲染时本进程负责的份额 i/n：只渲每 n 帧里的第 i 帧，不清空帧目录")
     ap.add_argument("--format", default="", help="画幅 16:9 / 1:1 / 9:16，默认取 shots.FORMATS 的第一个")
+    ap.add_argument("--version", default="", help="按用途出片时要做的版本（VERSIONS 的键），默认第一个")
     args = ap.parse_args(argv)
 
     import bpy
     geo, anim, scene, model, shots = load(args.product)
-    fmt = args.format or formats(shots)[0]
+    args.quality = scene.QUALITY_ALIAS.get(args.quality, args.quality)
+    uses = use_versions(shots)
+    if uses:
+        vname = args.version or next(iter(uses))
+        if vname not in uses:
+            raise ValueError(f"没有版本 {vname!r}，VERSIONS 里有：{list(uses)}")
+        fmt = uses[vname]["format"]
+        seq = version_shots(shots, vname, uses[vname])
+    else:
+        vname, fmt, seq = None, args.format or formats(shots)[0], shots.SHOTS
     geo.reset()
     model.build()
     if hasattr(shots, "prepare"):          # 模型建好后的额外准备：材质变体等
         shots.prepare()
     scene.setup(args.quality, getattr(shots, "STYLE", None), fmt)
-    tl = anim.Timeline(fmt, getattr(shots, "FORMAT_ZOOM", None), os.path.abspath(args.product)).build(shots.SHOTS)
+    mk = lambda: anim.Timeline(fmt, getattr(shots, "FORMAT_ZOOM", None), os.path.abspath(args.product),
+                               getattr(shots, "FIT", None))
+    canon = None
+    if seq is not shots.SHOTS and [s["id"] for s in seq] != [s["id"] for s in shots.SHOTS][:len(seq)]:
+        full = mk().build(shots.SHOTS)           # 先按完整顺序建一遍，记下每个 shot 开头的显隐和姿态
+        canon = (full.snap, [s["id"] for s in shots.SHOTS])
+    tl = mk().build(seq, canon)
     tl.frame_end = bpy.context.scene.frame_end
     place_cards(tl)
 
-    out = out_dir(args.product, fmt)
+    out = out_dir(args.product, fmt, vname)
     os.makedirs(out, exist_ok=True)
     if not args.part:
-        name = f"{args.quality}_{scene.tag(fmt)}" + ("_" + args.shots.replace(",", "_") if args.shots else "")
+        name = (f"{args.quality}_{vname}" if vname else f"{args.quality}_{scene.tag(fmt)}") + \
+               ("_" + args.shots.replace(",", "_") if args.shots else "")
+        vers = {vname: dict(shots=None, target=uses[vname]["target"])} if vname else versions(shots)
         export_timeline(tl, os.path.join(out, "timeline.json"),
                         dict(music=getattr(shots, "MUSIC", {}), size=scene.output_size(args.quality, fmt),
                              design=scene.design(fmt), format=fmt, quality=args.quality, shots_arg=args.shots,
                              lang=getattr(shots, "LANG", "en"), text=getattr(shots, "TEXT", {}),
-                             max_words=getattr(shots, "MAX_WORDS", 8), versions=versions(shots),
+                             max_words=getattr(shots, "MAX_WORDS", 8), versions=vers, version=vname,
                              module_max=getattr(shots, "MODULE_MAX", {"options": 0.2}), name=name))
     sc = bpy.context.scene
     ranges = [(sc.frame_start, sc.frame_end)]
@@ -234,6 +279,8 @@ def main(argv):
         say(f"timeline: {', '.join(f'{a}-{b}' for a, b in ranges)} ({sum(b - a + 1 for a, b in ranges) / anim.FPS:.1f}s)")
         for w in dict.fromkeys(tl.warnings):
             say("警告：" + w)
+        for m in tl.info:
+            say(m)
     if args.no_render:
         return tl
     frames = os.path.join(out, "frames")
