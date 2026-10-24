@@ -69,7 +69,7 @@ def main(argv):
     ap.add_argument("--shots", default="", help="只渲染这些 shot（id 前缀，逗号分隔）")
     ap.add_argument("--step", type=int, default=1, help="每隔几帧渲染一帧（预览用 2）")
     ap.add_argument("--no-render", action="store_true")
-    ap.add_argument("--worker", action="store_true", help="并行渲染的一个工作进程：不清空帧目录，跳过别的进程已认领的帧")
+    ap.add_argument("--part", default="", help="并行渲染时本进程负责的份额 i/n：只渲每 n 帧里的第 i 帧，不清空帧目录")
     args = ap.parse_args(argv)
 
     import bpy
@@ -82,10 +82,10 @@ def main(argv):
 
     out = os.path.join(os.path.abspath(args.product), "out")
     os.makedirs(out, exist_ok=True)
-    if not args.worker:
+    if not args.part:
         export_timeline(tl, os.path.join(out, "timeline.json"),
                         dict(music=getattr(shots, "MUSIC", {}), size=scene.output_size(args.quality),
-                             lang=getattr(shots, "LANG", "zh+en")))
+                             lang=getattr(shots, "LANG", "zh+en"), text=getattr(shots, "TEXT", {})))
     sc = bpy.context.scene
     ranges = [(sc.frame_start, sc.frame_end)]
     if args.shots:   # 只渲选中的 shot，不连带中间的
@@ -98,13 +98,16 @@ def main(argv):
     if args.no_render:
         return tl
     frames = os.path.join(out, "frames")
-    if args.worker:
-        sc.render.use_overwrite, sc.render.use_placeholder = False, True   # 多进程靠占位文件分帧
-    else:
+    # 并行时按帧号确定性分工（第 i 个进程渲 a+i*step, a+(i+n)*step ...），不靠占位文件，不会两个进程写同一帧
+    i, n = (int(x) for x in args.part.split("/")) if args.part else (0, 1)
+    if not args.part:
         shutil.rmtree(frames, ignore_errors=True)
     sc.render.filepath = os.path.join(frames, "f_")
+    sc.frame_step = args.step * n
     for a, b in ranges:
-        sc.frame_start, sc.frame_end = a, b
+        if a + i * args.step > b:
+            continue
+        sc.frame_start, sc.frame_end = a + i * args.step, b
         bpy.ops.render.render(animation=True)
     return tl
 

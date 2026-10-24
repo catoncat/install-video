@@ -85,35 +85,47 @@ def measure(P, zh, en, zpx, epx, zk="zh_b", ek="en"):
     return max(P.text_size(zh, zk, zpx)[0], P.text_size(en, ek, epx)[0]), zpx * 1.25 + (epx * 1.2 if en else 0)
 
 
+# 各类文字的（主行, 副行）字号，按 1920×1080 设计；产品可在 shots.py 里用 TEXT = dict(card=1.5) 按类型放大
+SIZE = {"step": (40, 22), "card": (64, 30), "note": (34, 23), "callout": (28, 20)}
+SCALE = {}
+
+def sz(kind):
+    k = SCALE.get(kind, 1.0)
+    return SIZE[kind][0] * k, SIZE[kind][1] * k
+
 def draw_step(P, it, a):
+    zp, ep = sz("step")
     x, y = 56, 48
+    w, h = measure(P, it["zh"], it["en"], zp, ep)
+    hb = max(84, h + 18)
     if it.get("step"):
-        P.rect((x, y, x + 84, y + 84), 14, ACCENT, 255 * a)
+        P.rect((x, y, x + hb, y + hb), 14, ACCENT, 255 * a)
         num = f"{it['step']:02d}"
-        nw, _ = P.text_size(num, "en_b", 44)
-        P.text((x + 42 - nw / 2, y + 14), num, "en_b", 44, (255, 255, 255), a)
-        x += 104
-    w, h = measure(P, it["zh"], it["en"], 40, 22)
-    P.rect((x - 16, y, x + w + 20, y + 84), 14, (255, 255, 255), 215 * a)
-    two_lines(P, x, y + 9, it["zh"], it["en"], 40, 22, INK, INK2, a)
+        nw, _ = P.text_size(num, "en_b", hb * 0.52)
+        P.text((x + hb / 2 - nw / 2, y + hb * 0.17), num, "en_b", hb * 0.52, (255, 255, 255), a)
+        x += hb + 20
+    P.rect((x - 16, y, x + w + 20, y + hb), 14, (255, 255, 255), 215 * a)
+    two_lines(P, x, y + (hb - h) / 2, it["zh"], it["en"], zp, ep, INK, INK2, a)
 
 def draw_card(P, it, a):
-    w, h = measure(P, it["zh"], it["en"], 64, 30)
-    x, y = 960 - w / 2, 740
+    zp, ep = sz("card")
+    w, h = measure(P, it["zh"], it["en"], zp, ep)
+    x, y = 960 - w / 2, min(740, 1080 - 190 - h)      # 放大后往上挪，给底部字幕留位置
     P.rect((x - 40, y - 28, x + w + 40, y + h + 30), 20, (18, 20, 24), 170 * a)
-    zw = P.text_size(it["zh"], "zh_b", 64)[0]
-    ew = P.text_size(it["en"], "en", 30)[0]
-    P.text((960 - zw / 2, y), it["zh"], "zh_b", 64, (255, 255, 255), a)
-    P.text((960 - ew / 2, y + 80), it["en"], "en", 30, (225, 228, 232), a)
+    zw = P.text_size(it["zh"], "zh_b", zp)[0]
+    ew = P.text_size(it["en"], "en", ep)[0]
+    P.text((960 - zw / 2, y), it["zh"], "zh_b", zp, (255, 255, 255), a)
+    P.text((960 - ew / 2, y + zp * 1.25), it["en"], "en", ep, (225, 228, 232), a)
 
 def draw_note(P, it, a):
-    w, h = measure(P, it["zh"], it["en"], 34, 23, "zh", "en")
+    zp, ep = sz("note")
+    w, h = measure(P, it["zh"], it["en"], zp, ep, "zh", "en")
     y = 1080 - 70 - h
     P.rect((960 - w / 2 - 34, y - 20, 960 + w / 2 + 34, y + h + 14), 16, (18, 20, 24), 175 * a)
-    zw = P.text_size(it["zh"], "zh", 34)[0]
-    ew = P.text_size(it["en"], "en", 23)[0]
-    P.text((960 - zw / 2, y), it["zh"], "zh", 34, (255, 255, 255), a)
-    P.text((960 - ew / 2, y + 34 * 1.25), it["en"], "en", 23, (220, 224, 230), a)
+    zw = P.text_size(it["zh"], "zh", zp)[0]
+    ew = P.text_size(it["en"], "en", ep)[0]
+    P.text((960 - zw / 2, y), it["zh"], "zh", zp, (255, 255, 255), a)
+    P.text((960 - ew / 2, y + zp * 1.25), it["en"], "en", ep, (220, 224, 230), a)
 
 OFF = {"right": (150, -110), "left": (-150, -110), "up": (0, -170), "down": (0, 150)}
 
@@ -122,7 +134,8 @@ def draw_callout(P, it, a, fr):
     if not front:
         return
     px, py = x * 1920, y * 1080
-    w, h = measure(P, it["zh"], it["en"], 28, 20)
+    zp, ep = sz("callout")
+    w, h = measure(P, it["zh"], it["en"], zp, ep)
     pad = 16
     dx, dy = OFF[it["side"]]
     if it["side"] == "right":
@@ -141,7 +154,7 @@ def draw_callout(P, it, a, fr):
     P.dot((px, py), 7, ACCENT, a, ring=(255, 255, 255))
     P.rect((bx, by, bx + w + 2 * pad, by + h + pad), 12, (255, 255, 255), 235 * a)
     P.rect((bx, by, bx + 6, by + h + pad), 3, ACCENT, 255 * a)
-    two_lines(P, bx + pad + 2, by + pad * 0.6, it["zh"], it["en"], 28, 20, INK, INK2, a)
+    two_lines(P, bx + pad + 2, by + pad * 0.6, it["zh"], it["en"], zp, ep, INK, INK2, a)
 
 
 def alpha(fr, a, b):
@@ -166,6 +179,7 @@ def main(out):
     os.makedirs(ov_dir)
     files = sorted(f for f in os.listdir(frames_dir) if f.endswith(".png"))
     w, h = tl["size"]                  # 输出尺寸（渲染帧是超采样的大图）
+    SCALE.update(tl.get("text", {}))
     if tl.get("lang") == "en":   # 纯英文：英文升为主行，用英文字体，不留空的第二行
         ALIAS.update(zh="en", zh_b="en_b")
         for it in tl["items"]:

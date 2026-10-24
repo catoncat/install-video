@@ -91,21 +91,22 @@ def cmd_make(args):
     shutil.rmtree(frames, ignore_errors=True)
     os.makedirs(frames)
     n = workers()
-    cmd = [bpy.app.binary_path, "-b", "--factory-startup", "--python-exit-code", "1", "-P", os.path.abspath(__file__),
-           "--", "worker", *args]
-    procs = [subprocess.Popen(cmd, stdout=subprocess.DEVNULL if i else None, stderr=subprocess.STDOUT) for i in range(n)]
+    cmd = [bpy.app.binary_path, "-b", "--factory-startup", "--python-exit-code", "1", "-P", os.path.abspath(__file__), "--"]
+    procs = [subprocess.Popen(cmd + ["worker", f"{i}/{n}", *args], stdout=subprocess.DEVNULL if i else None,
+                              stderr=subprocess.STDOUT) for i in range(n)]
     if any(pr.wait() for pr in procs):
-        raise SystemExit("渲染进程出错，单独运行 video worker ... 可以看到完整报错")
+        raise SystemExit("渲染进程出错，单独运行 video worker 0/1 <产品> <质量> 可以看到完整报错")
     print(f"render: {time.time() - t:.0f}s with {n} workers")
     # 合成放到干净的新进程：本进程已搭过 3D 场景，残留状态会让截帧变黑
-    if subprocess.run(cmd[:cmd.index("--") + 1] + ["compose", p]).returncode:
+    if subprocess.run(cmd + ["compose", p]).returncode:
         raise SystemExit("合成出错")
 
 def cmd_worker(args):
+    """args: <第几个/共几个> <产品> <质量> [shots]"""
     ensure_deps()
     from engine import run
-    _, argv = render_argv(args)
-    run.main(argv + ["--worker"])
+    _, argv = render_argv(args[1:])
+    run.main(argv + ["--part", args[0]])
 
 
 def cmd_compose(args):

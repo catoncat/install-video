@@ -52,6 +52,7 @@
 | `callout(sel, at, dur, 中, 英, side="right")` | 带引线的标注，跟着零件移动。side 取 right、left、up、down |
 | 普通函数 `fn(ctx)` 放进 `do` | 自定义动画：`ctx.f(秒)` 返回帧号，`ctx.resolve(sel)` 返回对象，`ctx.vis(obj, 秒, True/False)` 控制显隐。示例 `unit_copies` 用集合实例做了拼箱效果 |
 
+`TEXT = dict(card=1.5, note=1.2)`：按类型放大文字（step 步骤标题、card 居中卡片、note 底部字幕、callout 标注），手机竖屏观看时常用。
 `LANG = "en"`：只出英文字幕（英文升为主行，用英文字体）。默认 `"zh+en"`，中英双语。字幕的中文那一栏照样要填，方便和用户核对。
 `MUSIC = dict(bpm=96, root=48, seed=1)`：调整合成音乐的速度、调性（MIDI 根音）和随机种子。
 `STYLE = dict(bg=..., floor=..., ambient=..., ambient_strength=..., lines=True, line_color=..., line_opacity=0.75)`：覆盖画面风格，默认值见 `engine/scene.py` 里的 STYLE。背景色只给相机看，环境光单独设置，所以背景可以调得很暗，不会影响照明。
