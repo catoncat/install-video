@@ -11,6 +11,7 @@
   加 -v（或环境变量 VIDEO_VERBOSE=1）显示 Blender 的完整输出；默认只显示摘要，完整日志在 out/log.txt
   video frames <视频文件> [间隔秒数]             参考视频抽帧并生成总览图
   video sheet <图片目录>                        照片总览图（带文件名），方便逐张看
+  video swatch [产品目录]                       材料库（和产品材质）在标准灯光下的色卡，挑饰面用
   video pdf <PDF 文件>                          PDF 转成每页图片 + 内嵌原图 + 全文文字，再拼一张总览图
 """
 import sys, os, subprocess, time
@@ -272,6 +273,12 @@ def cmd_pdf(args):
     tools.pdf(os.path.abspath(args[0]))
 
 
+def cmd_swatch(args):
+    ensure_deps()
+    from engine import tools
+    tools.swatch(product_dir(args[0]) if args else None)
+
+
 def cmd_sheet(args):
     ensure_deps()
     from engine import tools
@@ -279,7 +286,7 @@ def cmd_sheet(args):
 
 
 def main(argv):
-    cmds = {"setup": cmd_setup, "init": cmd_init, "make": cmd_make, "compose": cmd_compose, "frames": cmd_frames, "sheet": cmd_sheet, "pdf": cmd_pdf,
+    cmds = {"setup": cmd_setup, "init": cmd_init, "make": cmd_make, "compose": cmd_compose, "frames": cmd_frames, "sheet": cmd_sheet, "pdf": cmd_pdf, "swatch": cmd_swatch,
             "worker": cmd_worker, "text": cmd_text, "_export": cmd_export, "_compose": cmd_compose_only}
     if not argv or argv[0] not in cmds:
         print(__doc__)

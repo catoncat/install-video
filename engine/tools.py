@@ -5,7 +5,7 @@ pdf(path)：PDF → <名字>_pdf/ 下的 page_NN.png（整页）、img_NN_MM.png
 frames(video, every=2.0)：每隔 every 秒抽一帧到 <视频名>_frames/，再拼一张总览图 sheet.jpg
 sheet(folder, per=16)：把目录里的图片拼成带文件名的总览图 <目录>_sheets/sheet_NN.jpg，方便逐张看
 """
-import os, re
+import os, re, sys
 import bpy
 from PIL import Image, ImageDraw, ImageOps
 from .overlay import font
@@ -100,3 +100,71 @@ def pdf(path, scale=2.0):
         fh.write("\n\n".join(texts))
     print(f"{len(doc)} pages, {n_img} images, text.txt -> {out}")
     return sheet(out, per=16)
+
+
+def swatch(product=None, size=400):
+    """材质色卡：材料库全部预设（给了产品目录就再加上产品自己的材质和变体），在标准灯光下逐个渲染，
+       拼成带名字的总览图。用来挑能拉开差别的饰面，不用反复出片试色。"""
+    from engine import run
+    geo, anim, scene, model, shots = run.load(product) if product else (None,) * 5
+    if geo is None:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from engine import geo, anim, scene
+    from engine import library
+    geo.reset()
+    items = [(k, d, library.material(k)) for k, (d, _) in library.PRESETS.items()]
+    if product:
+        model.build()
+        if hasattr(shots, "prepare"):
+            shots.prepare()
+        seen = {m.name for _, _, m in items}
+        for o in geo.model_objects():
+            for slot in o.material_slots:
+                if slot.material and slot.material.name not in seen:
+                    seen.add(slot.material.name)
+                    items.append((slot.material.name, "产品材质", slot.material))
+            o.hide_render = True
+    scene.setup("preview", getattr(shots, "STYLE", None) if product else None, "1:1")
+    sc = bpy.context.scene
+    sc.render.resolution_x = sc.render.resolution_y = size
+    sc.render.resolution_percentage = 100 * scene.SS
+    me = bpy.data.meshes.get("SWATCH") or bpy.data.meshes.new("SWATCH")
+    import bmesh
+    bm = bmesh.new()
+    geo._add_box(bm, (1.0, 0.05, 1.0), (0, 0.3, 0.5))        # 立面
+    geo._add_box(bm, (1.0, 0.6, 0.02), (0, -0.02, 0.01))     # 地面
+    bm.to_mesh(me); bm.free()
+    ob = bpy.data.objects.get("SWATCH") or bpy.data.objects.new("SWATCH", me)
+    if ob.name not in sc.collection.objects:
+        sc.collection.objects.link(ob)
+    cam, tgt = anim.scene_camera()
+    tgt.location = (0, 0.1, 0.42)
+    cam.location = (-1.25, -2.3, 1.35)
+    cam.data.lens = 50
+    tmp = os.path.join(os.path.abspath(product) if product else os.getcwd(), "out", "swatch")
+    os.makedirs(tmp, exist_ok=True)
+    from PIL import Image, ImageDraw
+    from .overlay import font
+    tiles = []
+    for name, desc, m in items:
+        ob.data.materials.clear()
+        ob.data.materials.append(m)
+        scene.patch_materials()
+        sc.render.filepath = os.path.join(tmp, f"{name}.png")
+        bpy.ops.render.render(write_still=True)
+        im = Image.open(sc.render.filepath).convert("RGB").resize((size, size), Image.LANCZOS)
+        lab = Image.new("RGB", (size, 54), "white")
+        d = ImageDraw.Draw(lab)
+        d.text((8, 4), name, fill=(20, 20, 20), font=font("en_b", 18))
+        d.text((8, 28), desc, fill=(90, 90, 90), font=font("zh", 15))
+        t = Image.new("RGB", (size, size + 54), "white")
+        t.paste(im, (0, 0)); t.paste(lab, (0, size))
+        tiles.append(t)
+    cols = 4
+    sheet = Image.new("RGB", (cols * size, ((len(tiles) + cols - 1) // cols) * (size + 54)), "white")
+    for i, t in enumerate(tiles):
+        sheet.paste(t, ((i % cols) * size, (i // cols) * (size + 54)))
+    path = os.path.join(os.path.dirname(tmp), "swatch.jpg")
+    sheet.save(path, quality=88)
+    print(f"swatch: {len(tiles)} 种材质 -> {path}")
+    return path
