@@ -25,6 +25,9 @@ def compose(out, product_dir):
 
     w, h = tl["size"]
     sc = bpy.data.scenes.get("COMPOSE") or bpy.data.scenes.new("COMPOSE")
+    r = sc.render
+    # 必须先设输出尺寸再加素材：FIT 按"加素材那一刻"的场景尺寸算缩放，顺序反了超采样帧会被裁成放大的中间一块
+    r.resolution_x, r.resolution_y, r.resolution_percentage = w, h, 100
     sc.sequence_editor_create()
     strips = sc.sequence_editor.strips if hasattr(sc.sequence_editor, "strips") else sc.sequence_editor.sequences
     for s in list(strips):
@@ -46,8 +49,6 @@ def compose(out, product_dir):
         snd.volume = v
         snd.keyframe_insert("volume", frame=fr)
 
-    r = sc.render
-    r.resolution_x, r.resolution_y, r.resolution_percentage = w, h, 100
     r.fps, r.fps_base = fps, 1
     sc.frame_start, sc.frame_end = 1, last
     r.use_sequencer = True
@@ -65,35 +66,38 @@ def compose(out, product_dir):
     r.use_file_extension = False
     bpy.ops.render.render(animation=True, scene=sc.name)
     print(f"video: {video}  ({dur:.1f}s @ {fps}fps, music: {os.path.basename(track)})")
-    review(out, tl, dict(zip(nums, files)))
+    review(out, tl, video, nums)
 
 
-def review(out, tl, frames, per=6, tw=640):
-    """每个 shot 抽 per 帧，叠上字幕层，拼成 3 列：out/review/<shot>.jpg"""
+def review(out, tl, video, nums, per=6, tw=640):
+    """从成片 video.mp4 里按 shot 各截 per 帧，拼成 3 列：out/review/<shot>.jpg。
+       截的是最终视频，所以合成、缩放、字幕层的问题都能在这里看到。"""
+    from . import tools
     rdir = os.path.join(out, "review")
     os.makedirs(rdir, exist_ok=True)
     for f in glob.glob(os.path.join(rdir, "*.jpg")):
         os.remove(f)
     lab = overlay.font("en_b", 18)
+    index = {n: k + 1 for k, n in enumerate(nums)}       # 时间线帧号 -> 视频第几帧
+    picks = {}
     for s in tl["shots"]:
-        have = [n for n in frames if s["start"] <= n <= s["end"]]
-        if not have:
-            continue
-        pick = [have[round(i * (len(have) - 1) / max(1, per - 1))] for i in range(min(per, len(have)))]
+        have = [n for n in nums if s["start"] <= n <= s["end"]]
+        if have:
+            picks[s["id"]] = (s, [have[round(i * (len(have) - 1) / max(1, per - 1))] for i in range(min(per, len(have)))])
+    grabbed, _ = tools.grab(video, sorted({index[n] for _, ns in picks.values() for n in ns}), os.path.join(rdir, "_tmp"))
+    for sid, (s, ns) in picks.items():
         tiles = []
-        for n in pick:
-            im = Image.open(frames[n]).convert("RGBA").resize(tuple(tl["size"]), Image.BOX)
-            ov = os.path.join(out, "overlay", os.path.basename(frames[n]))
-            if os.path.exists(ov):
-                im.alpha_composite(Image.open(ov))
-            im = im.convert("RGB")
+        for n in ns:
+            im = Image.open(grabbed[index[n]]).convert("RGB")
             im.thumbnail((tw, tw))
-            ImageDraw.Draw(im).text((8, im.size[1] - 26), f"{s['id']}  f{n}  {(n - s['start']) / tl['fps']:.1f}s",
+            ImageDraw.Draw(im).text((8, im.size[1] - 26), f"{sid}  f{n}  {(n - s['start']) / tl['fps']:.1f}s",
                                     fill=(255, 0, 80), font=lab)
             tiles.append(im)
-        tw2, th = tiles[0].size        # 实际缩略图尺寸（小于 tw 时不留黑边）
+        tw2, th = tiles[0].size
         sheet = Image.new("RGB", (tw2 * 3, th * ((len(tiles) + 2) // 3)), "black")
         for i, t in enumerate(tiles):
             sheet.paste(t, ((i % 3) * tw2, (i // 3) * th))
-        sheet.save(os.path.join(rdir, f"{s['id']}.jpg"), quality=85)
+        sheet.save(os.path.join(rdir, f"{sid}.jpg"), quality=85)
+    import shutil
+    shutil.rmtree(os.path.join(rdir, "_tmp"), ignore_errors=True)
     print(f"review: {rdir}")

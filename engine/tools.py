@@ -34,25 +34,41 @@ def sheet(folder, per=16, cols=4, w=420, h=330, out=None):
     return paths
 
 
-def frames(video, every=2.0):
-    out = os.path.splitext(video)[0] + "_frames"
-    os.makedirs(out, exist_ok=True)
-    sc = bpy.data.scenes.new("FRAMES")
+def grab(video, indices, folder):
+    """用视频编辑器从视频里截指定帧（从 1 开始计），返回 {帧: jpg 路径}"""
+    os.makedirs(folder, exist_ok=True)
+    sc = bpy.data.scenes.get("GRAB") or bpy.data.scenes.new("GRAB")
+    clip = bpy.data.movieclips.load(video)
+    (w, h), fps = clip.size, clip.fps
+    bpy.data.movieclips.remove(clip)
+    r = sc.render
+    r.resolution_x, r.resolution_y, r.resolution_percentage = w, h, 100   # 先设尺寸再加素材
     sc.sequence_editor_create()
     strips = sc.sequence_editor.strips if hasattr(sc.sequence_editor, "strips") else sc.sequence_editor.sequences
+    for s in list(strips):
+        strips.remove(s)
     st = strips.new_movie("v", video, 1, 1)
-    clip = bpy.data.movieclips.load(video)
-    (w, h), fps, n = clip.size, clip.fps, st.frame_final_duration
-    print(f"{w}x{h} {fps}fps {n / fps:.1f}s")
-    r = sc.render
-    r.resolution_x, r.resolution_y = w, h
-    r.resolution_percentage = 50 if max(w, h) > 1280 else 100
+    sc.frame_end = st.frame_final_duration
     r.use_sequencer = True
+    if hasattr(r.image_settings, "media_type"):
+        r.image_settings.media_type = "IMAGE"
     r.image_settings.file_format = "JPEG"
-    f = 1
-    while f <= n:
+    out = {}
+    for f in indices:
         sc.frame_set(f)
-        r.filepath = os.path.join(out, f"t{(f - 1) / fps:06.1f}s.jpg")
+        r.filepath = out[f] = os.path.join(folder, f"v{f:06d}.jpg")
         bpy.ops.render.render(write_still=True, scene=sc.name)
-        f += max(1, round(every * fps))
+    return out, fps
+
+
+def frames(video, every=2.0):
+    """参考视频每隔 every 秒抽一帧，拼成总览图"""
+    clip = bpy.data.movieclips.load(video)
+    fps, n = clip.fps, clip.frame_duration
+    bpy.data.movieclips.remove(clip)
+    out = os.path.splitext(video)[0] + "_frames"
+    step = max(1, round(every * fps))
+    paths, _ = grab(video, list(range(1, n + 1, step)), out)
+    for f, p in paths.items():
+        os.replace(p, os.path.join(out, f"t{(f - 1) / fps:06.1f}s.jpg"))
     return sheet(out, per=20, out=out + "_sheets")
