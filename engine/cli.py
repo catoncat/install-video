@@ -7,33 +7,38 @@
   video compose <产品目录>                      只重做字幕层和合成（改了字幕或音乐，不用重新渲染）
   video frames <视频文件> [间隔秒数]             参考视频抽帧并生成总览图
   video sheet <图片目录>                        照片总览图（带文件名），方便逐张看
+  video pdf <PDF 文件>                          PDF 转成每页图片 + 内嵌原图 + 全文文字，再拼一张总览图
 """
 import sys, os, subprocess, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEPS = os.path.join(ROOT, ".deps")
-PILLOW = "pillow==12.3.0"           # 锁定版本，Python 3.11–3.13 都有现成的 wheel
+PKGS = {"PIL": "pillow==12.3.0", "pypdfium2": "pypdfium2==5.13.0"}   # 锁定版本，各平台都有现成的 wheel
 
 
 def ensure_deps():
-    """Pillow 装到 <skill>/.deps/，不需要管理员权限，不碰系统 Python"""
+    """Pillow、pypdfium2 装到 <skill>/.deps/，不需要管理员权限，不碰系统 Python"""
+    import importlib
     for p in (DEPS, ROOT):
         if p not in sys.path:
             sys.path.insert(0, p)
-    try:
-        import PIL  # noqa: F401
+    missing = []
+    for mod, pkg in PKGS.items():
+        try:
+            importlib.import_module(mod)
+        except ImportError:
+            missing.append(pkg)
+    if not missing:
         return
-    except ImportError:
-        pass
-    print("installing Pillow into .deps/ ...")
+    print(f"installing {' '.join(missing)} into .deps/ ...")
     py = sys.executable
     if subprocess.run([py, "-m", "pip", "--version"], capture_output=True).returncode != 0:
         subprocess.run([py, "-m", "ensurepip", "--user"], check=True)
     subprocess.run([py, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location",
-                    "--target", DEPS, PILLOW], check=True)
-    import importlib
+                    "--target", DEPS, *missing], check=True)
     importlib.invalidate_caches()
-    import PIL  # noqa: F401
+    for mod in PKGS:
+        importlib.import_module(mod)
 
 
 def product_dir(arg):
@@ -129,6 +134,12 @@ def cmd_frames(args):
     tools.frames(os.path.abspath(args[0]), float(args[1]) if len(args) > 1 else 2.0)
 
 
+def cmd_pdf(args):
+    ensure_deps()
+    from engine import tools
+    tools.pdf(os.path.abspath(args[0]))
+
+
 def cmd_sheet(args):
     ensure_deps()
     from engine import tools
@@ -136,7 +147,7 @@ def cmd_sheet(args):
 
 
 def main(argv):
-    cmds = {"setup": cmd_setup, "init": cmd_init, "make": cmd_make, "compose": cmd_compose, "frames": cmd_frames, "sheet": cmd_sheet,
+    cmds = {"setup": cmd_setup, "init": cmd_init, "make": cmd_make, "compose": cmd_compose, "frames": cmd_frames, "sheet": cmd_sheet, "pdf": cmd_pdf,
             "worker": cmd_worker}
     if not argv or argv[0] not in cmds:
         print(__doc__)

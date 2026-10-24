@@ -30,7 +30,9 @@ def _pick(kind):
     raise FileNotFoundError(f"找不到 {kind} 字体，请设置环境变量 {ENV[kind]}=字体路径:索引")
 FONTS = {k: _pick(k) for k in CANDIDATES}
 _cache = {}
+ALIAS = {}       # 纯英文模式下把中文字体角色映射到英文字体
 def font(kind, px):
+    kind = ALIAS.get(kind, kind)
     key = (kind, px)
     if key not in _cache:
         path, idx = FONTS[kind]
@@ -77,10 +79,10 @@ def two_lines(P, x, y, zh, en, zpx, epx, zc, ec, a, zk="zh_b", ek="en"):
     ew, _ = P.text_size(en, ek, epx)
     P.text((x, y), zh, zk, zpx, zc, a)
     P.text((x, y + zpx * 1.25), en, ek, epx, ec, a)
-    return max(zw, ew), zpx * 1.25 + epx * 1.2
+    return max(zw, ew), zpx * 1.25 + (epx * 1.2 if en else 0)
 
 def measure(P, zh, en, zpx, epx, zk="zh_b", ek="en"):
-    return max(P.text_size(zh, zk, zpx)[0], P.text_size(en, ek, epx)[0]), zpx * 1.25 + epx * 1.2
+    return max(P.text_size(zh, zk, zpx)[0], P.text_size(en, ek, epx)[0]), zpx * 1.25 + (epx * 1.2 if en else 0)
 
 
 def draw_step(P, it, a):
@@ -164,6 +166,10 @@ def main(out):
     os.makedirs(ov_dir)
     files = sorted(f for f in os.listdir(frames_dir) if f.endswith(".png"))
     w, h = tl["size"]                  # 输出尺寸（渲染帧是超采样的大图）
+    if tl.get("lang") == "en":   # 纯英文：英文升为主行，用英文字体，不留空的第二行
+        ALIAS.update(zh="en", zh_b="en_b")
+        for it in tl["items"]:
+            it["zh"], it["en"] = it["en"], ""
     items = merge_steps(tl["items"])
     seen = {}
     for name in files:

@@ -84,7 +84,8 @@ def main(argv):
     os.makedirs(out, exist_ok=True)
     if not args.worker:
         export_timeline(tl, os.path.join(out, "timeline.json"),
-                        dict(music=getattr(shots, "MUSIC", {}), size=scene.output_size(args.quality)))
+                        dict(music=getattr(shots, "MUSIC", {}), size=scene.output_size(args.quality),
+                             lang=getattr(shots, "LANG", "zh+en")))
     sc = bpy.context.scene
     ranges = [(sc.frame_start, sc.frame_end)]
     if args.shots:   # 只渲选中的 shot，不连带中间的

@@ -1,5 +1,7 @@
 """整理资料用的小工具（在 Blender 里运行）。
 
+pdf(path)：PDF → <名字>_pdf/ 下的 page_NN.png（整页）、img_NN_MM.png（内嵌原图）、text.txt（全文），外加总览图
+
 frames(video, every=2.0)：每隔 every 秒抽一帧到 <视频名>_frames/，再拼一张总览图 sheet.jpg
 sheet(folder, per=16)：把目录里的图片拼成带文件名的总览图 <目录>_sheets/sheet_NN.jpg，方便逐张看
 """
@@ -73,3 +75,28 @@ def frames(video, every=2.0):
     for f, p in paths.items():
         os.replace(p, os.path.join(out, f"t{(f - 1) / fps:06.1f}s.jpg"))
     return sheet(out, per=20, out=out + "_sheets")
+
+
+def pdf(path, scale=2.0):
+    """用 pypdfium2 处理 PDF：整页渲染、内嵌图片、全文文字（各平台通用，不依赖系统工具）"""
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+    out = os.path.splitext(path)[0] + "_pdf"
+    os.makedirs(out, exist_ok=True)
+    doc = pdfium.PdfDocument(path)
+    texts, n_img = [], 0
+    for i, page in enumerate(doc, 1):
+        page.render(scale=scale).to_pil().save(os.path.join(out, f"page_{i:02d}.png"))
+        texts.append(f"===== 第 {i} 页 =====\n" + page.get_textpage().get_text_bounded())
+        for j, ob in enumerate(page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=2), 1):
+            try:
+                im = ob.get_bitmap(render=False).to_pil()
+            except Exception:
+                continue
+            if min(im.size) >= 120:          # 跳过图标、线条之类的小图
+                im.convert("RGB").save(os.path.join(out, f"img_{i:02d}_{j:02d}.png"))
+                n_img += 1
+    with open(os.path.join(out, "text.txt"), "w", encoding="utf-8") as fh:
+        fh.write("\n\n".join(texts))
+    print(f"{len(doc)} pages, {n_img} images, text.txt -> {out}")
+    return sheet(out, per=16)
