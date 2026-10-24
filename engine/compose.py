@@ -65,8 +65,21 @@ def compose(out, product_dir):
     r.filepath = video
     r.use_file_extension = False
     bpy.ops.render.render(animation=True, scene=sc.name)
-    print(f"video: {video}  ({dur:.1f}s @ {fps}fps, music: {os.path.basename(track)})")
+    check(video, (w, h), last, fps)
+    print(f"video: {video}  ({w}x{h}, {dur:.1f}s @ {fps}fps, music: {os.path.basename(track)})")
     review(out, tl, video, nums)
+
+
+def check(video, size, frames, fps):
+    """成片核对：尺寸、帧数、帧率必须和时间线一致，否则报错，不留废片"""
+    clip = bpy.data.movieclips.load(video)
+    got = (tuple(clip.size), clip.frame_duration, round(clip.fps))
+    bpy.data.movieclips.remove(clip)
+    want = (tuple(size), frames, fps)
+    if got[0] != want[0] or abs(got[1] - want[1]) > 1 or got[2] != want[2]:
+        os.replace(video, video + ".bad.mp4")
+        raise RuntimeError(f"成片不符合预期：得到 尺寸{got[0]} 帧数{got[1]} 帧率{got[2]}，应为 尺寸{want[0]} 帧数{want[1]} 帧率{want[2]}。"
+                           f"已改名为 video.mp4.bad.mp4")
 
 
 def review(out, tl, video, nums, per=6, tw=640):
