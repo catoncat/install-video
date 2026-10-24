@@ -160,32 +160,60 @@ def studio(st):
         o = bpy.data.objects.get(n)
         if o:
             bpy.data.objects.remove(o, do_unlink=True)
+    old = bpy.data.objects.get("CYC")
+    if old is not None and old.get("v") != 2:             # 旧版单侧弧形背景换掉
+        bpy.data.objects.remove(old, do_unlink=True)
     if bpy.data.objects.get("CYC") is None:
         import bmesh
+        # 碗形无缝背景：半径 60 m 的平地，四周以 40 m 半径圆弧上翻成墙，任何方向、任何仰角都看不到边
+        R0, RC, TOP, seg, steps = 60.0, 40.0, 200.0, 96, 16
+        prof = [(0.0, -0.21), (R0, -0.21)] + [(R0 + RC * math.sin(a), -0.21 + RC - RC * math.cos(a))
+                                              for a in [i / steps * math.pi / 2 for i in range(1, steps + 1)]]
+        prof.append((R0 + RC, TOP))
         bm = bmesh.new()
-        # 地面 + 后方弧形上翻，无地平线
-        r, depth, width, steps = 10.0, 120.0, 400.0, 16
-        prof = [(-depth, -0.21)] + [(r * math.sin(a), -0.21 + r - r * math.cos(a))
-                                     for a in [i / steps * math.pi / 2 for i in range(steps + 1)]] + [(r, 120)]
-        prof = [(y + 25, z) for y, z in prof]
-        rows = [[bm.verts.new((x, y, z)) for (y, z) in prof] for x in (-width / 2, width / 2)]
-        for i in range(len(prof) - 1):
-            bm.faces.new((rows[0][i], rows[1][i], rows[1][i + 1], rows[0][i + 1]))
+        rings = [[bm.verts.new((r * math.cos(2 * math.pi * k / seg), r * math.sin(2 * math.pi * k / seg), z))
+                  for k in range(seg)] for r, z in prof]
+        for i in range(len(rings) - 1):
+            for k in range(seg):
+                n = (k + 1) % seg
+                bm.faces.new((rings[i][k], rings[i][n], rings[i + 1][n], rings[i + 1][k]))
+        bmesh.ops.remove_doubles(bm, verts=rings[0], dist=1e-6)        # 圆心那一圈合成一个点
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         me = bpy.data.meshes.new("CYC"); bm.to_mesh(me); bm.free()
         cyc = bpy.data.objects.new("CYC", me)
+        cyc["v"] = 2
         bpy.context.scene.collection.objects.link(cyc)
         m = bpy.data.materials.get("cyc") or bpy.data.materials.new("cyc")
         m.use_nodes = True
         cyc.data.materials.append(m)
         for p in cyc.data.polygons:
             p.use_smooth = True
-    b = next(n for n in bpy.data.materials["cyc"].node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-    b.inputs["Base Color"].default_value = (*st["floor"], 1)
-    b.inputs["Roughness"].default_value = 0.9
+    cyc_material(st)
+    bpy.data.objects["CYC"].visible_shadow = False         # 背景不挡阳光
     _light("KEY", "SUN", (0, 0, 10), (42, 0, -32), 4.5, 1.5)
     # 补光灯面不要太大：大灯面的软阴影要很多采样才不出噪点
     _light("FILL", "AREA", (-9, -8, 6), (60, 0, -50), 700, 3, (0.92, 0.95, 1.0))
     _light("RIM", "AREA", (8, 9, 7), (-55, 0, 140), 1400, 3, (1.0, 0.96, 0.9))
+
+def cyc_material(st):
+    """地面受光、接阴影；越往上翻越过渡成不受光的背景色（和相机看到的世界背景同色），所以看不出边"""
+    m = bpy.data.materials["cyc"]
+    nt = m.node_tree
+    nt.nodes.clear()
+    N, L = nt.nodes.new, nt.links.new
+    floor, wall = N("ShaderNodeBsdfPrincipled"), N("ShaderNodeEmission")
+    floor.inputs["Base Color"].default_value = (*st["floor"], 1)
+    floor.inputs["Roughness"].default_value = 0.9
+    wall.inputs["Color"].default_value = (*st["bg"], 1)
+    geo_n, sep, ramp = N("ShaderNodeNewGeometry"), N("ShaderNodeSeparateXYZ"), N("ShaderNodeMapRange")
+    ramp.inputs["From Min"].default_value, ramp.inputs["From Max"].default_value = 0.35, 0.97
+    L(geo_n.outputs["Normal"], sep.inputs[0])
+    L(sep.outputs["Z"], ramp.inputs["Value"])
+    mix, out = N("ShaderNodeMixShader"), N("ShaderNodeOutputMaterial")
+    L(ramp.outputs["Result"], mix.inputs[0])
+    L(wall.outputs[0], mix.inputs[1])
+    L(floor.outputs[0], mix.inputs[2])
+    L(mix.outputs[0], out.inputs["Surface"])
 
 def patch_materials():
     """给每个材质接上：对象属性 hl（0~1）→ 底色混合高亮橙 + 少量自发光；

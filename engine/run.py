@@ -143,6 +143,17 @@ def place_cards(tl):
             s["_card_pos"] = place_card(tl, s, start, end)
 
 
+def queue_notes(items, tl):
+    """底部字幕排队：后一条要等前一条完全淡出才出现（两条同时在屏上会超字数、互相压住）"""
+    notes = sorted((it for it in items if it["type"] == "note"), key=lambda it: it["frames"][0])
+    for prev, nxt in zip(notes, notes[1:]):
+        if nxt["frames"][0] <= prev["frames"][1]:
+            nxt["frames"][0] = prev["frames"][1] + 1
+            if nxt["frames"][1] - nxt["frames"][0] < 15:
+                tl.warnings.append(f"{nxt['shot']}：字幕 {nxt['en'] or nxt['zh']!r} 和上一条重叠，排队后只剩 "
+                                   f"{(nxt['frames'][1] - nxt['frames'][0] + 1) / 30:.1f}s，把两条错开")
+
+
 def export_timeline(tl, path, extra):
     """把字幕、标注和标注锚点的屏幕坐标写成 JSON，给 overlay / compose 用"""
     import bpy
@@ -170,6 +181,7 @@ def export_timeline(tl, path, extra):
                 track[fr] = [round(p.x, 4), round(1 - p.y, 4), p.z > 0]
             items.append(dict(type="callout", frames=[a, b], zh=c["zh"], en=c["en"], side=c["side"], track=track,
                               shot=s["id"]))
+    queue_notes(items, tl)
     data = dict(fps=FPS, frame_end=tl.frame_end, items=items,
                 shots=[dict(id=s["id"], start=a, end=b - 1, module=s.get("module")) for s, a, b in tl.shots], **extra)
     with open(path, "w", encoding="utf-8") as fh:
