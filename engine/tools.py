@@ -149,7 +149,7 @@ def swatch(product=None, size=400):
     for name, desc, m in items:
         ob.data.materials.clear()
         ob.data.materials.append(m)
-        scene.patch_materials()
+        scene.patch_materials((getattr(shots, "STYLE", None) or {}).get("hl", scene.HL_COLOR) if product else scene.HL_COLOR)
         sc.render.filepath = os.path.join(tmp, f"{name}.png")
         bpy.ops.render.render(write_still=True)
         im = Image.open(sc.render.filepath).convert("RGB").resize((size, size), Image.LANCZOS)

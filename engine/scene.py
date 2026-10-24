@@ -13,6 +13,7 @@ STYLE = dict(
     lines=True,                    # 描边
     line_color=(0.10, 0.11, 0.13),
     line_opacity=0.75,
+    hl=HL_COLOR,                   # 高亮色；产品本身是暖色 / 木色时换成别的颜色（比如青色 (0.1, 0.6, 1.0)），免得撞色
 )
 
 QUALITY = {
@@ -70,7 +71,7 @@ def setup(quality="preview", style=None, fmt="16:9"):
             pass
     world(st)
     studio(st)
-    patch_materials()
+    patch_materials(st["hl"])
     lines(sc, st)
 
 def world(st):
@@ -215,9 +216,9 @@ def cyc_material(st):
     L(floor.outputs[0], mix.inputs[2])
     L(mix.outputs[0], out.inputs["Surface"])
 
-def patch_materials():
-    """给每个材质接上：对象属性 hl（0~1）→ 底色混合高亮橙 + 少量自发光；
-       物体随机值 → AOV "oid"（描边用来区分零件）。可重复调用"""
+def patch_materials(color=HL_COLOR):
+    """给每个材质接上：对象属性 hl（0~1）→ 底色混合高亮色 + 少量自发光；
+       物体随机值 → AOV "oid"（描边用来区分零件）。可重复调用（会更新高亮色）"""
     for m in bpy.data.materials:
         if not m.use_nodes:
             continue
@@ -229,25 +230,29 @@ def patch_materials():
         if m.name == "cyc":
             continue
         if "HL_ATTR" in nt.nodes:
+            nt.nodes["HL_MIX"].inputs["B"].default_value = (*color, 1)
+            if nt.nodes["HL_MIX"].get("emit"):
+                next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED").inputs["Emission Color"].default_value = (*color, 1)
             continue
         b = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
         if b is None:
             continue
         attr = nt.nodes.new("ShaderNodeAttribute"); attr.name = "HL_ATTR"
         attr.attribute_type = "OBJECT"; attr.attribute_name = "hl"
-        mix = nt.nodes.new("ShaderNodeMix"); mix.data_type = "RGBA"
+        mix = nt.nodes.new("ShaderNodeMix"); mix.data_type = "RGBA"; mix.name = "HL_MIX"
         base = b.inputs["Base Color"]
         if base.is_linked:                 # 贴图 / 程序纹理材质：把原来接进底色的输出接到 A
             nt.links.new(base.links[0].from_socket, mix.inputs["A"])
         else:
             mix.inputs["A"].default_value = base.default_value
-        mix.inputs["B"].default_value = (*HL_COLOR, 1)
+        mix.inputs["B"].default_value = (*color, 1)
         scale = nt.nodes.new("ShaderNodeMath"); scale.operation = "MULTIPLY"; scale.inputs[1].default_value = 0.65
         nt.links.new(attr.outputs["Fac"], scale.inputs[0])
         nt.links.new(scale.outputs[0], mix.inputs["Factor"])
         nt.links.new(mix.outputs["Result"], b.inputs["Base Color"])
         if b.inputs["Emission Strength"].default_value == 0:
-            b.inputs["Emission Color"].default_value = (*HL_COLOR, 1)
+            b.inputs["Emission Color"].default_value = (*color, 1)
+            mix["emit"] = True
             em = nt.nodes.new("ShaderNodeMath"); em.operation = "MULTIPLY"; em.inputs[1].default_value = 0.35
             nt.links.new(attr.outputs["Fac"], em.inputs[0])
             nt.links.new(em.outputs[0], b.inputs["Emission Strength"])

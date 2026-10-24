@@ -207,6 +207,7 @@ class Timeline:
         self.shots = []            # [(shot dict, start frame, end frame)]
         self.warnings = []
         self.n_copies = 0
+        self._below = set()        # 相机在地面以下的 shot（只警告一次）
         self.cur = {}              # obj -> 当前姿态 dict(pose=(姿态名, 进度)|None, loc, rot, eul)，给 relative / to_pose 用
 
     def _mark(self, o, frame, mode):
@@ -601,6 +602,10 @@ class Timeline:
             fr = start + round(u * (end - 1 - start))
             tgt.location = p
             cam.location = p + Vector((math.sin(a) * math.cos(b), -math.cos(a) * math.cos(b), math.sin(b))) * d
+            if cam.location.z < -0.15 and s["id"] not in self._below:
+                self._below.add(s["id"])
+                self.warnings.append(f"{s['id']}：相机跑到地面以下（z={cam.location.z:.2f}），检查 cam 的 el（仰角）"
+                                     f"和 target，建议写成 cam(target, az=..., el=..., dist=...)")
             cam.data.lens = lerp(ln)
             tgt.keyframe_insert("location", frame=fr)
             cam.keyframe_insert("location", frame=fr)
