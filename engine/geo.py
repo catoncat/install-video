@@ -3,10 +3,11 @@
 所有对象都放进 ROOT 集合下按 stage 分的子集合，对象上记录 ["stage"]。
 动画按对象名或 "@stage" 选取对象，所以命名要稳定。
 """
-import bpy, bmesh
+import bpy, bmesh, fnmatch, difflib
 from mathutils import Vector
 
 ROOT = "MODEL"
+POSES = {}         # 具名姿态：{姿态名: {对象名: [("rotate", 轴, 轴心, 度) / ("move", 位移), ...]}}，由 pose() 登记
 
 
 # ---------------- 集合 / 对象 ----------------
@@ -24,6 +25,7 @@ def reset():
             bpy.data.meshes.remove(m)
     root = bpy.data.collections.new(ROOT)
     bpy.context.scene.collection.children.link(root)
+    POSES.clear()
 
 def coll(stage):
     c = bpy.data.collections.get(stage)
@@ -45,6 +47,43 @@ def obj(name, bm, material, stage, bevel=0.0, **props):
     if bevel:
         add_bevel(ob, bevel)
     return ob
+
+def model_objects():
+    root = bpy.data.collections[ROOT]
+    return [o for c in [root, *root.children_recursive] for o in c.objects]
+
+def resolve(sel, allow_empty=False):
+    """选择器 -> 对象列表：对象名通配（"post_*"）、"@stage"、对象本身，或它们组成的 list"""
+    if isinstance(sel, bpy.types.Object):
+        return [sel]
+    sels = [sel] if isinstance(sel, str) else list(sel)
+    objs = model_objects()
+    out = []
+    for s in sels:
+        if isinstance(s, bpy.types.Object):
+            hit = [s]
+        else:
+            hit = ([o for o in objs if o.get("stage") == s[1:]] if s.startswith("@")
+                   else [o for o in objs if fnmatch.fnmatchcase(o.name, s)])
+        if not hit and not allow_empty:
+            pool = sorted({"@" + o["stage"] for o in objs}) if s.startswith("@") else [o.name for o in objs]
+            near = difflib.get_close_matches(s, pool, n=5, cutoff=0.4)
+            raise ValueError(f"选择器 {s!r} 没有匹配任何对象。相近的有：{near}")
+        out += [o for o in hit if o not in out]
+    return out
+
+def pose(name, sel, rotate=None, move=None):
+    """登记具名姿态（如运输时的折叠状态 "folded"）。模型照常按"装好后"建，这里只描述怎么从静止姿态变到该姿态：
+         rotate=dict(axis="X", pivot=(x,y,z), deg=-90)：绕世界轴转（也可以给 list，依次转）；
+         move=(dx,dy,dz)：平移。同一对象多次调用会按调用顺序叠加（先转后移就先写 rotate）。
+       分镜里用 set_pose("folded") 硬切到该姿态，to_pose("rest") 动画展开回来。"""
+    ops = []
+    for r in ([rotate] if isinstance(rotate, dict) else list(rotate or [])):
+        ops.append(("rotate", r["axis"], tuple(r["pivot"]), float(r["deg"])))
+    if move is not None:
+        ops.append(("move", tuple(move)))
+    for o in resolve(sel):
+        POSES.setdefault(name, {}).setdefault(o.name, []).extend(ops)
 
 def add_bevel(ob, width):
     mod = ob.modifiers.new("bevel", "BEVEL")
@@ -71,13 +110,39 @@ def mat(name, color, metallic=0.0, rough=0.5, transmission=0.0, emission=0.0):
     return m
 
 
+def ghost(name="ghost", color=(0.55, 0.75, 1.0), alpha=0.18):
+    """半透明说明材质（集装箱轮廓、吊装范围、尺寸示意）"""
+    m = mat(name, color, 0.0, 0.4)
+    b = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    b.inputs["Alpha"].default_value = alpha
+    if hasattr(m, "surface_render_method"):
+        m.surface_render_method = "BLENDED"
+    return m
+
+def wire_box(name, size, center, stage, t=0.03, material=None, fill=None, **props):
+    """线框长方体（12 条边），fill=材质时再加一个半透明盒体。用于"一个 40HQ 装 2 台"这类说明"""
+    sx, sy, sz = (v / 2 for v in size)
+    cx, cy, cz = center
+    parts = []
+    for y in (-sy, sy):
+        for z in (-sz, sz):
+            parts.append(((size[0] + t, t, t), (cx, cy + y, cz + z)))
+    for x in (-sx, sx):
+        for z in (-sz, sz):
+            parts.append(((t, size[1] + t, t), (cx + x, cy, cz + z)))
+        for y in (-sy, sy):
+            parts.append(((t, t, size[2] + t), (cx + x, cy + y, cz)))
+    ob = boxes(name, parts, material or mat("wire_line", (0.9, 0.92, 0.95), 0.0, 0.5, emission=0.6), stage, **props)
+    if fill is not None:
+        box(name + "_fill", size, center, fill, stage, **props)
+    return ob
+
+
 def variant(sel, tag, material):
     """材质变体：把 sel（对象列表或选择器）复制一份换成 material，放进 stage "variant_<tag>"，默认不可见。
        复制品和原件共用网格（材质挂在对象上），名字是 "<原名>@<tag>"。分镜里用 swap(sel, tag, 秒) 切换。
        在 shots.py 的 prepare() 里调用（模型建好之后、时间线之前）。"""
-    if isinstance(sel, (str, list, tuple)) and not isinstance(next(iter(sel), None), bpy.types.Object):
-        from .anim import resolve              # 运行时再导入，避免和 anim 循环引用
-        sel = resolve(sel)
+    sel = resolve(sel)
     stage = f"variant_{tag}"
     out = []
     for o in sel:

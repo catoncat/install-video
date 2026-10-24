@@ -5,7 +5,7 @@
   "post_*"（对象名通配）、"@04_posts"（整个 stage）、或它们组成的 list。
 不够用时，在 do 里放一个普通函数 fn(ctx)，引擎会在该 shot 里调用它（见 Ctx）。
 """
-import bpy, math, fnmatch, difflib
+import bpy, math
 from mathutils import Vector, Matrix, Euler
 from . import geo
 
@@ -34,13 +34,15 @@ def cam(target, az, el, dist, lens=35, target_end=None, fmt=None):
        fmt={"9:16": dict(dist=..., lens=..., el=...)}：某个画幅单独改机位（给了 lens 就不再乘 FORMAT_ZOOM）。"""
     return dict(target=target, target_end=target_end, az=az, el=el, dist=dist, lens=lens, fmt=fmt or {})
 
-def move(sel, at, dur, frm=(0, 0, 0), to=(0, 0, 0), out=None, spin=0, stagger=0.0, hl=None, exit=False):
-    """把对象从 静止位置+frm 移到 静止位置+to。
+def move(sel, at, dur, frm=(0, 0, 0), to=(0, 0, 0), out=None, spin=0, stagger=0.0, hl=None, exit=False,
+         relative="rest"):
+    """把对象从 基准+frm 移到 基准+to。基准默认是静止位置；relative="current" 时是对象当前的动画位置
+       （比如先 set_pose("folded") 再整体吊落：drop(UNIT, 0.3, h=3, relative="current")）。
        out=距离：沿对象的 ["out"] 方向偏移（螺栓、墙板用）；spin=绕 ["spin_axis"] 转的圈数；
        stagger=每个对象依次延后的秒数；exit=结束后隐藏。本来不可见的对象在开始时出现。
        hl 默认：装上去的高亮，退场的不高亮。"""
     return dict(kind="move", sel=sel, at=at, dur=dur, frm=frm, to=to, out=out, spin=spin,
-                stagger=stagger, hl=(not exit) if hl is None else hl, exit=exit)
+                stagger=stagger, hl=(not exit) if hl is None else hl, exit=exit, relative=relative)
 
 def drop(sel, at, dur=1.5, h=1.2, **kw):
     return move(sel, at, dur, frm=(0, 0, h), **kw)
@@ -58,6 +60,17 @@ def rotate(sel, at, dur, axis="Z", pivot=None, edge=None, frm=0.0, to=90.0, stag
        多个对象一起转时轴心只算一次，所以门扇和把手会作为一个整体转。"""
     return dict(kind="rotate", sel=sel, at=at, dur=dur, axis=axis, pivot=pivot, edge=edge, frm=frm, to=to,
                 stagger=stagger, hl=(not exit) if hl is None else hl, exit=exit)
+
+def set_pose(name, at=0.0, sel=None):
+    """在 at 秒硬切到 model.py 里用 pose() 登记的姿态（"rest" = 装好后的静止姿态）。
+       sel 不给就是登记了该姿态的全部对象。常用在运输 / 吊装镜头开头：set_pose("folded")"""
+    return dict(kind="set_pose", name=name, sel=sel, at=at)
+
+def to_pose(name, at, dur, sel=None, stagger=0.0, hl=None):
+    """从当前姿态动画过渡到 name（"rest" 或登记的姿态名）。沿登记的转动路径走（和 rotate 同一套算法，
+       是弧线不是直线），所以 to_pose("rest", 1, 2, sel="roof_wing_*") 就是"屋顶翼板展开"。
+       当前姿态不在这条路径上时（比如被 rotate 转过），退化成位置直线 + 旋转球面插值。hl 默认高亮"""
+    return dict(kind="to_pose", name=name, sel=sel, at=at, dur=dur, stagger=stagger, hl=True if hl is None else hl)
 
 def copies(sel, spots, at=0.0, until=None, drop=0.0, dur=1.2, stagger=0.0, name=None):
     """把 sel 整体复制到 spots=[(x,y,z) 偏移, ...]（集合实例，几乎不占渲染时间）：拼箱、叠箱、货包。
@@ -102,23 +115,24 @@ def callout(sel, at, dur, zh, en, side="right", anchor="center"):
 
 
 # ---------------- 选择 ----------------
-def model_objects():
-    root = bpy.data.collections[geo.ROOT]
-    return [o for c in [root, *root.children_recursive] for o in c.objects]
+model_objects, resolve = geo.model_objects, geo.resolve        # 实现放在 geo，model.py 里也能用选择器
 
-def resolve(sel, allow_empty=False):
-    sels = [sel] if isinstance(sel, str) else list(sel)
-    objs = model_objects()
-    out = []
-    for s in sels:
-        hit = ([o for o in objs if o.get("stage") == s[1:]] if s.startswith("@")
-               else [o for o in objs if fnmatch.fnmatchcase(o.name, s)])
-        if not hit and not allow_empty:
-            pool = sorted({"@" + o["stage"] for o in objs}) if s.startswith("@") else [o.name for o in objs]
-            near = difflib.get_close_matches(s, pool, n=5, cutoff=0.4)
-            raise ValueError(f"选择器 {s!r} 没有匹配任何对象。相近的有：{near}")
-        out += [o for o in hit if o not in out]
-    return out
+def pose_after_rotate(loc, rot, axis, pivot, deg):
+    """绕经过 pivot 的世界轴 axis 转 deg 度：返回新的 (位置 Vector, 旋转 3×3 矩阵)。rot 是 3×3 矩阵。
+       rotate / to_pose / 自定义动画都用这一套，衔接时不会跳"""
+    R = Matrix.Rotation(math.radians(deg), 3, axis)
+    p = Vector(pivot)
+    return p + R @ (Vector(loc) - p), R @ rot
+
+def pose_tf(o, name, f=1.0):
+    """对象在姿态 name 下（f=0~1 表示走到一半）的 (位置, 旋转矩阵)；"rest" 或没登记该姿态的对象返回静止姿态"""
+    loc, rot = Vector(o["rest"]), Euler(o.get("rest_rot", (0, 0, 0))).to_matrix()
+    for op in ([] if name == "rest" else geo.POSES.get(name, {}).get(o.name, [])):
+        if op[0] == "rotate":
+            loc, rot = pose_after_rotate(loc, rot, op[1], op[2], op[3] * f)
+        else:
+            loc = loc + Vector(op[1]) * f
+    return loc, rot
 
 def rest_matrix(o):
     """静止姿态的世界矩阵（建时间线时记下的位置和旋转），不受动画当前状态影响"""
@@ -192,9 +206,24 @@ class Timeline:
         self.shots = []            # [(shot dict, start frame, end frame)]
         self.warnings = []
         self.n_copies = 0
+        self.cur = {}              # obj -> 当前姿态 dict(pose=(姿态名, 进度)|None, loc, rot, eul)，给 relative / to_pose 用
 
     def _mark(self, o, frame, mode):
         self.interp.setdefault(o, {})[frame] = mode
+
+    def _cur(self, o):
+        if o not in self.cur:
+            e = Euler(o.get("rest_rot", (0, 0, 0)))
+            self.cur[o] = dict(pose=None, loc=Vector(o["rest"]), rot=e.to_matrix(), eul=e)
+        return self.cur[o]
+
+    def _key_tf(self, o, fr, loc, rot, prev=None):
+        """打一帧位置 + 旋转（rot 为 3×3 矩阵），欧拉角接着 prev 走，避免 ±180° 跳变"""
+        eul = rot.to_euler("XYZ", prev) if prev is not None else rot.to_euler("XYZ")
+        o.location, o.rotation_euler = loc, eul
+        o.keyframe_insert("location", frame=fr)
+        o.keyframe_insert("rotation_euler", frame=fr)
+        return eul
 
     def _ensure_rest(self, o):
         """第一次打关键帧之前，先在第 1 帧记下静止姿态并保持，免得片头沿用后面某个关键帧的值"""
@@ -248,19 +277,26 @@ class Timeline:
                 if a["kind"] == "swap":
                     self._swap(ctx, a, state)
                     continue
-                targets = resolve(a["sel"])
+                if a["kind"] in ("set_pose", "to_pose") and a["sel"] is None:
+                    targets = self._pose_targets(a["name"])
+                else:
+                    targets = resolve(a["sel"])
                 pivot = self._pivot(a, targets) if a["kind"] == "rotate" else None
                 for i, o in enumerate(targets):
                     at = a["at"] + i * a.get("stagger", 0.0)
                     entering = o not in state and o not in tmp_hidden   # hide 优先于入场
-                    if a["kind"] in ("move", "rotate"):
+                    if a["kind"] == "set_pose":
+                        self._set_pose(ctx, o, a["name"], at)
+                    elif a["kind"] in ("move", "rotate", "to_pose"):
                         if a["kind"] == "move":
                             self._move(ctx, o, a, at)
-                        else:
+                        elif a["kind"] == "rotate":
                             self._rotate(ctx, o, a, at, pivot)
+                        else:
+                            self._to_pose(ctx, o, a, at)
                         if entering:
                             ctx.vis(o, at, True)
-                        if a["exit"]:
+                        if a.get("exit"):
                             ctx.vis(o, at + a["dur"], False)
                         if a["hl"]:
                             self._hl(ctx, o, at, a["dur"])
@@ -283,6 +319,8 @@ class Timeline:
                     elif a["kind"] == "hl":
                         self._hl(ctx, o, at, a["dur"])
                 for o in targets:
+                    if a["kind"] == "set_pose":            # 只改姿态，不改显隐
+                        continue
                     if a["kind"] == "vanish" or a.get("exit"):
                         state.discard(o)
                     else:
@@ -310,8 +348,66 @@ class Timeline:
         bpy.context.scene.frame_end = frame - 1
         return self
 
+    def _pose_targets(self, name):
+        if name == "rest":                          # 回到静止：所有当前不在静止姿态的对象
+            return [o for o, c in self.cur.items() if c["pose"]]
+        if name not in geo.POSES:
+            raise ValueError(f"姿态 {name!r} 没有登记，model.py 里用 pose({name!r}, 选择器, rotate=..., move=...) 登记。"
+                             f"已有：{sorted(geo.POSES)}")
+        return resolve(list(geo.POSES[name]))
+
+    def _set_pose(self, ctx, o, name, at):
+        """硬切到姿态：该帧打关键帧并保持，之前的关键帧到这里截断"""
+        self._ensure_rest(o)
+        fr = ctx.f(at)
+        loc, rot = pose_tf(o, name)
+        eul = self._key_tf(o, fr, loc, rot, self._cur(o)["eul"])
+        self._mark(o, fr, "CONSTANT")
+        self.cuts.append((o, fr))
+        self.cur[o] = dict(pose=None if name == "rest" else (name, 1.0), loc=loc, rot=rot, eul=eul)
+        o.location, o.rotation_euler = Vector(o["rest"]), Euler(o.get("rest_rot", (0, 0, 0)))
+
+    def _to_pose(self, ctx, o, a, at):
+        """沿登记的转动路径过渡；路径对不上时退化为直线 + 球面插值。相对路径的平移偏移（如还吊在空中）保留"""
+        name, c = a["name"], self._cur(o)
+        if c["pose"]:
+            pn, fs = c["pose"]
+            fe = 0.0 if name == "rest" else (1.0 if name == pn else None)
+        else:
+            pn, fs, fe = name, 0.0, (None if name == "rest" else 1.0)
+            rest_rot = pose_tf(o, "rest")[1]
+            if max(abs(c["rot"][i][j] - rest_rot[i][j]) for i in range(3) for j in range(3)) > 1e-4:
+                fe = None                                   # 被 rotate 转过，不在路径上
+        if fe is not None:
+            off = c["loc"] - pose_tf(o, pn, fs)[0]
+            def tf(e):
+                loc, rot = pose_tf(o, pn, fs + (fe - fs) * e)
+                return loc + off, rot
+        else:
+            t_loc, t_rot = pose_tf(o, name)
+            q0, q1 = c["rot"].to_quaternion(), t_rot.to_quaternion()
+            tf = lambda e: (c["loc"].lerp(t_loc, e), q0.slerp(q1, e).to_matrix())
+        f0, f1 = ctx.f(at), ctx.f(at + a["dur"])
+        self._ensure_rest(o)
+        frames = list(range(f0, f1, 2)) + [f1]
+        if o not in ctx.moved and f0 > ctx.start:
+            frames.insert(0, ctx.start)
+            self._mark(o, ctx.start, "CONSTANT")
+        ctx.moved.add(o)
+        eul = c["eul"]
+        for fr in frames:
+            u = 0.0 if fr <= f0 else (fr - f0) / max(1, f1 - f0)
+            loc, rot = tf(u * u * (3 - 2 * u))
+            eul = self._key_tf(o, fr, loc, rot, eul)
+            if fr >= f0:
+                self._mark(o, fr, "LINEAR")
+        self._mark(o, f1, "CONSTANT")
+        self.cur[o] = dict(pose=None if name == "rest" else (name, 1.0), loc=loc, rot=rot, eul=eul)
+        o.location, o.rotation_euler = Vector(o["rest"]), Euler(o.get("rest_rot", (0, 0, 0)))
+
     def _move(self, ctx, o, a, at):
-        rest = Vector(o["rest"])
+        c = self._cur(o)
+        rest = c["loc"].copy() if a.get("relative") == "current" else Vector(o["rest"])
         frm, to = Vector(a["frm"]), Vector(a["to"])
         if a["out"]:
             frm = frm + Vector(o["out"]) * a["out"]
@@ -326,12 +422,15 @@ class Timeline:
         for fr, off in keys:
             o.location = rest + off
             o.keyframe_insert("location", frame=fr)
+        c["loc"] = rest + to
+        if a.get("relative") != "current":
+            c["pose"] = None
         if a["spin"]:
             idx = "XYZ".index(o["spin_axis"])
             for fr, ang in ((f0, a["spin"] * 2 * math.pi), (f1, 0.0)):
                 o.rotation_euler[idx] = ang
                 o.keyframe_insert("rotation_euler", index=idx, frame=fr)
-        o.location = rest
+        o.location = Vector(o["rest"])
 
     def _pivot(self, a, targets):
         pv = a["pivot"]
@@ -347,10 +446,6 @@ class Timeline:
     def _rotate(self, ctx, o, a, at, pivot):
         """绕 pivot 转动：逐 2 帧打位置 + 旋转关键帧（线性），结束后保持"""
         L0, E0 = Vector(o["rest"]), Euler(o.get("rest_rot", (0, 0, 0)))
-        def pose(deg, prev):
-            R = Matrix.Rotation(math.radians(deg), 3, a["axis"])
-            eul = (R @ E0.to_matrix()).to_euler("XYZ", prev) if prev else (R @ E0.to_matrix()).to_euler("XYZ")
-            return pivot + R @ (L0 - pivot), eul
         f0, f1 = ctx.f(at), ctx.f(at + a["dur"])
         self._ensure_rest(o)
         frames = list(range(f0, f1, 2)) + [f1]
@@ -361,14 +456,13 @@ class Timeline:
         for fr in frames:
             u = 0.0 if fr <= f0 else (fr - f0) / max(1, f1 - f0)
             e = u * u * (3 - 2 * u)
-            loc, prev = pose(a["frm"] + (a["to"] - a["frm"]) * e, prev)
-            o.location, o.rotation_euler = loc, prev
-            o.keyframe_insert("location", frame=fr)
-            o.keyframe_insert("rotation_euler", frame=fr)
+            loc, rot = pose_after_rotate(L0, E0.to_matrix(), a["axis"], pivot, a["frm"] + (a["to"] - a["frm"]) * e)
+            prev = self._key_tf(o, fr, loc, rot, prev)
             self._mark(o, fr, "LINEAR")
         if frames[0] < f0:
             self._mark(o, frames[0], "CONSTANT")
         self._mark(o, f1, "CONSTANT")
+        self.cur[o] = dict(pose=None, loc=loc, rot=rot, eul=prev)
         o.location, o.rotation_euler = L0, E0
 
     def _copies(self, ctx, a):
