@@ -48,14 +48,15 @@ def grab(video, indices, folder):
     for s in list(strips):
         strips.remove(s)
     st = strips.new_movie("v", video, 1, 1)
-    sc.frame_end = st.frame_final_duration
+    sc.frame_start = sc.frame_end = sc.frame_current = 1
     r.use_sequencer = True
     if hasattr(r.image_settings, "media_type"):
         r.image_settings.media_type = "IMAGE"
     r.image_settings.file_format = "JPEG"
     out = {}
     for f in indices:
-        sc.frame_set(f)
+        # 场景帧号固定在 1，平移素材让第 f 帧落在 1 上（指定 scene 渲染时 frame_set 不生效）
+        st.frame_start = 2 - f
         r.filepath = out[f] = os.path.join(folder, f"v{f:06d}.jpg")
         bpy.ops.render.render(write_still=True, scene=sc.name)
     return out, fps

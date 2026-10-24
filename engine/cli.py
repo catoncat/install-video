@@ -92,7 +92,9 @@ def cmd_make(args):
     if any(pr.wait() for pr in procs):
         raise SystemExit("渲染进程出错，单独运行 video worker ... 可以看到完整报错")
     print(f"render: {time.time() - t:.0f}s with {n} workers")
-    cmd_compose([p])
+    # 合成放到干净的新进程：本进程已搭过 3D 场景，残留状态会让截帧变黑
+    if subprocess.run(cmd[:cmd.index("--") + 1] + ["compose", p]).returncode:
+        raise SystemExit("合成出错")
 
 def cmd_worker(args):
     ensure_deps()
