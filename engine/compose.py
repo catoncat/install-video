@@ -127,8 +127,9 @@ def check(video, size, frames, fps):
 
 
 def review(out, tl, video, nums, per=6, tw=640):
-    """从成片里按 shot 各截 per 帧，拼成 3 列：out/review/<shot>.jpg。
-       截的是最终视频，所以合成、缩放、字幕层的问题都能在这里看到。"""
+    """按 shot 各取 per 帧，拼成 3 列：out/review/<shot>.jpg。自查（纯色帧、整条一样）用从成片里截的帧，
+       所以合成、缩放、字幕层的问题都能发现；成片宽度不到 960（draft）时，拼图改用内部渲染的高清帧
+       （2 倍超采样）叠字幕层，特写里的小零件也看得清。"""
     from . import tools
     rdir = os.path.join(out, "review")
     os.makedirs(rdir, exist_ok=True)
@@ -147,6 +148,13 @@ def review(out, tl, video, nums, per=6, tw=640):
         tiles = []
         for n in ns:
             im = Image.open(grabbed[index[n]]).convert("RGB")
+            raw = os.path.join(out, "frames", f"f_{n:04d}.png")
+            if im.size[0] < 960 and os.path.exists(raw):
+                hd = Image.open(raw).convert("RGBA")
+                ov = os.path.join(out, "overlay", f"f_{n:04d}.png")
+                if os.path.exists(ov):
+                    hd.alpha_composite(Image.open(ov).convert("RGBA").resize(hd.size, Image.LANCZOS))
+                im = hd.convert("RGB")
             im.thumbnail((tw, tw))
             ImageDraw.Draw(im).text((8, im.size[1] - 26), f"{sid}  f{n}  {(n - s['start']) / tl['fps']:.1f}s",
                                     fill=(255, 0, 80), font=lab)
