@@ -5,6 +5,11 @@
 from engine.anim import *
 from . import model as m
 
+# 这个示例是中英双语说明版，不是默认的国际站营销版
+LANG = "zh+en"
+FORMATS = ["16:9"]
+MAX_WORDS = None
+
 FULL = ["@00_ground", "@01_foundation", "@02_floor_frame", "@03_floor_deck", "@04_posts", "@05_roof_frame",
         "@06_walls", "@07_door_window", "@08_trim", "@09_fasteners", "@10_services"]
 FLOOR = ["@02_floor_frame", "@03_floor_deck"]

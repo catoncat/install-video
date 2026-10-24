@@ -2,10 +2,12 @@
 通过 video.cmd（Windows）或 video.sh（macOS / Linux）调用：
 
   video setup                                   首次使用：装依赖到 .deps/，检查字体，再渲染一个示例镜头自检
-  video init <工作目录>/<产品名> [示例名]         从示例复制出一个新产品（默认示例 kpx2）
-  video make <产品目录> [draft|preview|final] [shot前缀,...]   渲染 → 字幕层 → 合成 MP4 → 自查拼图
-  video compose <产品目录>                      只重做字幕层和合成（改了字幕或音乐，不用重新渲染）
-  video text <产品目录>                         列出每一屏同时出现的文字、英文单词数、宽度（写到 out/text.md）
+  video init <工作目录>/<产品名> [kpx2]          新建产品：默认是国际站营销视频模板；加 kpx2 复制中英说明版示例
+  video make <产品目录> [draft|preview|final] [shot前缀,...] [--format 9:16|all]
+                                                渲染 → 字幕层 → 合成 MP4（含各版本）→ 自查拼图。
+                                                draft / preview 默认只出 FORMATS 的第一个画幅，final 出全部画幅
+  video compose <产品目录> [--format ...]        只重做字幕和合成（改了字幕、版本或音乐，不用重新渲染）
+  video text <产品目录>                         列出每一屏同时出现的文字、英文单词数、宽度（写到 out/<画幅>/text.md）
   加 -v（或环境变量 VIDEO_VERBOSE=1）显示 Blender 的完整输出；默认只显示摘要，完整日志在 out/log.txt
   video frames <视频文件> [间隔秒数]             参考视频抽帧并生成总览图
   video sheet <图片目录>                        照片总览图（带文件名），方便逐张看
@@ -75,8 +77,8 @@ def cmd_setup(_):
                               stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         for line in pr.stdout:
             log.append(line.rstrip())
-        if pr.wait() or not os.path.exists(os.path.join(demo, "out", "draft_05a.mp4")) \
-                or not os.path.exists(os.path.join(demo, "out", "review", "05a_post.jpg")):
+        if pr.wait() or not os.path.exists(os.path.join(demo, "out", "16x9", "draft_16x9_05a.mp4")) \
+                or not os.path.exists(os.path.join(demo, "out", "16x9", "review", "05a_post.jpg")):
             raise RuntimeError("示例渲染自检失败，最后的输出：\n" + "\n".join(log))
         shutil.rmtree(tmp, ignore_errors=True)
     except Exception as e:
@@ -121,6 +123,13 @@ def workers():
        叠起来，开太多反而抢显存。保守默认，机器好的自己调高"""
     return int(os.environ.get("VIDEO_WORKERS", max(1, min(3, (os.cpu_count() or 4) // 4))))
 
+def opt(args, flag):
+    """取出 --flag 值，返回 (值或 None, 其余参数)"""
+    if flag in args:
+        i = args.index(flag)
+        return args[i + 1], args[:i] + args[i + 2:]
+    return None, args
+
 def render_argv(args):
     p = product_dir(args[0])
     quality = args[1] if len(args) > 1 else "preview"
@@ -132,75 +141,123 @@ def render_argv(args):
         argv += ["--shots", args[2]]
     return p, argv
 
+def pick_formats(p, quality, want):
+    """--format all / 某个画幅；不给时 final 出全部，draft / preview 只出第一个"""
+    from engine import run
+    shots = run.load(p)[-1]
+    fs = run.formats(shots)
+    if want == "all":
+        return fs
+    if want:
+        return [want]
+    return fs if quality == "final" else fs[:1]
+
 def cmd_make(args):
-    """主进程导出时间线、清空帧目录，再开 N 个 Blender 进程一起渲染，最后在新进程里合成"""
+    """每个画幅：主进程导出时间线、清空帧目录，开 N 个 Blender 进程一起渲染，最后在新进程里合成"""
     ensure_deps()
     import shutil
     from engine import run
     from engine.log import say
     loud, args = verbose(args)
+    want, args = opt(args, "--format")
     p, argv = render_argv(args)
-    t = time.time()
-    run.main(argv + ["--no-render"])
-    frames = os.path.join(p, "out", "frames")
-    shutil.rmtree(frames, ignore_errors=True)
-    os.makedirs(frames)
-    log = os.path.join(p, "out", "log.txt")
-    open(log, "w").close()
-    n = workers()
-    out_to = None if loud else open(log, "a", encoding="utf-8")
-    procs = [subprocess.Popen(blender_cmd() + ["worker", f"{i}/{n}", *args], stdout=out_to, stderr=subprocess.STDOUT)
-             for i in range(n)]
-    failed = [pr.wait() for pr in procs]
-    if out_to:
-        out_to.close()
-    if any(failed):
-        if not loud:
-            print("".join(deque(open(log, encoding="utf-8", errors="replace"), maxlen=30)))
-        raise SystemExit(f"渲染进程出错，完整日志：{log}")
-    say(f"render: {time.time() - t:.0f}s with {n} workers")
-    # 合成放到干净的新进程：本进程已搭过 3D 场景，残留状态会让截帧变黑
-    run_logged(blender_cmd() + ["compose", p], log, loud)
-    say(f"完整日志：{log}")
+    for fmt in pick_formats(p, argv[2], want):
+        t = time.time()
+        run.main(argv + ["--no-render", "--format", fmt])
+        out = run.out_dir(p, fmt)
+        frames = os.path.join(out, "frames")
+        shutil.rmtree(frames, ignore_errors=True)
+        os.makedirs(frames)
+        log = os.path.join(out, "log.txt")
+        open(log, "w").close()
+        n = workers()
+        out_to = None if loud else open(log, "a", encoding="utf-8")
+        procs = [subprocess.Popen(blender_cmd() + ["worker", f"{i}/{n}", *args, "--format", fmt], stdout=out_to,
+                                  stderr=subprocess.STDOUT) for i in range(n)]
+        failed = [pr.wait() for pr in procs]
+        if out_to:
+            out_to.close()
+        if any(failed):
+            if not loud:
+                print("".join(deque(open(log, encoding="utf-8", errors="replace"), maxlen=30)))
+            raise SystemExit(f"渲染进程出错，完整日志：{log}")
+        say(f"render {fmt}: {time.time() - t:.0f}s with {n} workers")
+        # 合成放到干净的新进程：本进程已搭过 3D 场景，残留状态会让截帧变黑
+        run_logged(blender_cmd() + ["_compose", out, p], log, loud)
+        say(f"完整日志：{log}")
 
 def cmd_worker(args):
-    """args: <第几个/共几个> <产品> <质量> [shots]"""
+    """args: <第几个/共几个> <产品> <质量> [shots] --format <画幅>"""
     ensure_deps()
     from engine import run
+    fmt, args = opt(args, "--format")
     _, argv = render_argv(args[1:])
-    run.main(argv + ["--part", args[0]])
+    run.main(argv + ["--part", args[0], "--format", fmt])
 
 
 def cmd_text(args):
     ensure_deps()
     from engine import run, overlay
+    want, args = opt(args, "--format")
     p = product_dir(args[0])
-    run.main([p, "--no-render", "--quality", "draft"])
-    overlay.text_report(os.path.join(p, "out"))
+    fmt = want or run.formats(run.load(p)[-1])[0]
+    run.main([p, "--no-render", "--quality", "draft", "--format", fmt])
+    overlay.text_report(run.out_dir(p, fmt))
 
 
 def cmd_compose(args):
-    args = verbose(args)[1]
+    """改了字幕 / 版本 / 音乐后重新合成：先按上次的档位重新导出时间线（新进程），再合成（再一个新进程）"""
+    ensure_deps()
+    import glob, json
+    loud, args = verbose(args)
+    want, args = opt(args, "--format")
     p = product_dir(args[0])
+    from engine.scene import tag
+    outs = [os.path.join(p, "out", tag(want))] if want else sorted(os.path.dirname(f) for f in
+                                                                   glob.glob(os.path.join(p, "out", "*", "timeline.json")))
+    if not outs:
+        raise SystemExit("还没有渲染过，先运行 video make")
+    for out in outs:
+        tl = json.load(open(os.path.join(out, "timeline.json"), encoding="utf-8"))
+        log = os.path.join(out, "log.txt")
+        run_logged(blender_cmd() + ["_export", p, tl["quality"], tl.get("shots_arg", ""), "--format", tl["format"]], log, loud)
+        run_logged(blender_cmd() + ["_compose", out, p], log, loud)
+
+def cmd_export(args):
+    """内部：只重新导出时间线（字幕、标注位置），不渲染"""
+    ensure_deps()
+    from engine import run
+    fmt, args = opt(args, "--format")
+    _, argv = render_argv(args)
+    run.main(argv + ["--no-render", "--format", fmt])
+
+def cmd_compose_only(args):
+    """内部：字幕层 + 合成 + 版本 + 自查，在干净进程里跑。args: <out 目录> <产品目录>"""
     ensure_deps()
     from engine import overlay, compose
-    out = os.path.join(p, "out")
+    out, p = args
     overlay.main(out)
+    overlay.text_report(out)
     compose.compose(out, p)
 
 
 def cmd_init(args):
+    """默认：国际站营销模板（示例模型 + 营销分镜骨架）；第二个参数给示例名（如 kpx2）则原样复制该示例"""
     import shutil
     dst = os.path.abspath(args[0])
-    src = os.path.join(ROOT, "examples", args[1] if len(args) > 1 else "kpx2")
     if not os.path.basename(dst).isidentifier():
         raise SystemExit("产品目录名只能用字母、数字、下划线，且不以数字开头，例如 house_a")
     if os.path.exists(dst):
         raise SystemExit(f"{dst} 已存在")
-    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("out", "__pycache__", "storyboard.md"))
-    with open(os.path.join(dst, "storyboard.md"), "w", encoding="utf-8") as fh:   # 分镜从空白开始，示例的留在 skill 里参考
-        fh.write("# 分镜 v1\n\n- 时长：\n- 画幅：\n- 字幕语言：\n\n"
-                 "| # | 段落 | 时长 | 画面 | 字幕 |\n|---|---|---|---|---|\n\n## 需要确认\n")
+    if len(args) > 1:
+        shutil.copytree(os.path.join(ROOT, "examples", args[1]), dst, ignore=shutil.ignore_patterns("out", "__pycache__"))
+    else:
+        tpl = os.path.join(ROOT, "engine", "templates", "marketing")
+        os.makedirs(dst)
+        for f in ("__init__.py", "model.py"):        # 模型先用示例的，跑通后换成自己的产品
+            shutil.copy(os.path.join(ROOT, "examples", "kpx2", f), dst)
+        for f in os.listdir(tpl):
+            shutil.copy(os.path.join(tpl, f), dst)
     print(f"created {dst}：改写 model.py / shots.py / storyboard.md，然后 video make {dst} draft")
 
 def cmd_frames(args):
@@ -223,7 +280,7 @@ def cmd_sheet(args):
 
 def main(argv):
     cmds = {"setup": cmd_setup, "init": cmd_init, "make": cmd_make, "compose": cmd_compose, "frames": cmd_frames, "sheet": cmd_sheet, "pdf": cmd_pdf,
-            "worker": cmd_worker, "text": cmd_text}
+            "worker": cmd_worker, "text": cmd_text, "_export": cmd_export, "_compose": cmd_compose_only}
     if not argv or argv[0] not in cmds:
         print(__doc__)
         sys.exit(1)
