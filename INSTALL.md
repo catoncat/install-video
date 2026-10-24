@@ -10,7 +10,7 @@
 ## 1. 安装
 
 1. **git**：没有就先装。Windows 用 `winget install --id Git.Git -e`，macOS 用 `xcode-select --install`。
-2. **克隆**：问用户想把工具放在哪里。用户没有特别要求时，Windows 默认放在 `%USERPROFILE%\tools\install-video`，macOS / Linux 默认放在 `~/tools/install-video`。
+2. **克隆**：**先告诉用户你打算装在哪里，等用户确认后再装**（不要不问就装）。用户没有特别要求时，Windows 默认放在 `%USERPROFILE%\tools\install-video`，macOS / Linux 默认放在 `~/tools/install-video`。
    ```
    git clone https://github.com/catoncat/install-video <目录>
    ```
