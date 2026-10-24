@@ -6,19 +6,19 @@
 ## 安装
 
 ```bash
-# Claude Code
-git clone https://github.com/catoncat/install-video ~/.claude/skills/install-video
+git clone https://github.com/catoncat/install-video <任意目录>/install-video
 ```
-其他 agent：克隆到任意目录，让 agent 先读 `SKILL.md`。
+- Claude Code：克隆到 `~/.claude/skills/install-video`，会自动识别为 skill。
+- Codex、Cursor 等其他 agent：克隆到任意目录，agent 会读 `AGENTS.md`；或者直接告诉 agent 先读 `SKILL.md`。agent 需要能在本机执行命令。
 
 然后运行一次环境安装。唯一的依赖是 Blender 4.4 以上，找不到会自动安装（Windows 用 winget，macOS 用 Homebrew，Linux 用 snap）：
 
 ```bash
-~/.claude/skills/install-video/video.sh setup      # macOS / Linux
-%USERPROFILE%\.claude\skills\install-video\video.cmd setup   # Windows
+<目录>/install-video/video.sh setup     # macOS / Linux
+<目录>\install-video\video.cmd setup    # Windows
 ```
 
-更新：`git -C ~/.claude/skills/install-video pull`
+更新：`git -C <目录>/install-video pull`
 
 ## 用法
 
