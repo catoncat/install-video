@@ -21,7 +21,7 @@
    - macOS / Linux：`./video.sh setup`
 
    没有 Blender 时会自动安装：Windows 用 winget，macOS 用 Homebrew，Linux 用 snap。Windows 安装时系统会弹出权限确认，提前告诉用户点"是"。
-   - **成功的标志**：输出里有一行以 `| ok` 结尾。之后 Blender 还会打印一行退出信息，不用管。
+   - `setup` 最后会用示例渲染一个镜头做自检，大约半分钟。**成功的标志：最后一行是 `SETUP OK`**；是 `SETUP FAILED` 就把整段输出给用户看。
    - winget 不可用（老版本 Windows 10）时，请用户从 https://www.blender.org/download/ 下载 Blender 4.4 以上的版本（选 LTS），装完再运行一次 `setup`。Blender 装在非默认位置时，设置环境变量 `BLENDER=<blender 可执行文件路径>`。
    - pip 下载太慢或失败时，设置国内镜像再重试：`PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`。
    - `setup` 输出里列出了字幕要用的中文和英文字体。如果报找不到字体，把报错原样告诉用户。

@@ -109,6 +109,8 @@ def bolt(name, center, axis, sign):
     return ob
 
 def ground():
+    # 现场混凝土地坪（深色，给基础一个"工地"的感觉）。引擎自带无缝背景地面（z=-0.21，颜色由 STYLE 的 floor 控制），
+    # 一般产品不需要再建地面；要建就做成比产品暗的小块，别做大，不然边缘会变成一条地平线
     box("ground_pad", (14, 9, 0.02), (0, 0, -0.21), M["site"], "00_ground")
 
 def foundation():

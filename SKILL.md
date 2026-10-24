@@ -14,14 +14,14 @@ API 细节见 [reference.md](reference.md)，完整示例见 `examples/kpx2/`（
 
 ## 0. 环境（第一次使用时做）
 
-唯一的依赖是 **Blender 4.4 以上**。Pillow 会自动装进 `<skill>/.deps/`，不需要系统 Python，也不需要 ffmpeg。
+唯一的依赖是 **Blender**：已在 5.2.x 上完整测试，4.4 以上应该可用（如果在 4.x 上 setup 自检没通过，就换 5.2 LTS）。Pillow 和 pypdfium2 会自动装进 `<skill>/.deps/`，不需要系统 Python，也不需要 ffmpeg。
 
 1. 运行 `video setup`。
    - **Windows**：找不到 Blender 时会用 winget 自动安装。安装时系统会弹出权限确认，提前告诉用户点"是"。没有 winget（老版本 Windows 10），就请用户从 https://www.blender.org/download/ 下载安装包（选 LTS 版本），装完再运行一次 `video setup`。
    - **macOS**：用 Homebrew 安装（`brew install --cask blender`）。没有 Homebrew 的话，请用户下载 dmg，把 Blender 拖进"应用程序"。
    - **Linux**：用 snap 安装。
    - Blender 装在非默认位置时，设置环境变量 `BLENDER=<blender 可执行文件路径>`。
-2. 输出里出现以 `| ok` 结尾的那一行，才算环境装好（之后 Blender 还会打印一行退出信息，不用管）。输出里列出的字体就是视频字幕会用的中英文字体，缺中文字体时要提醒用户。
+2. `setup` 会装依赖、检查字体，再用示例渲染一个镜头、合成、截图自查。**最后一行是 `SETUP OK` 才算装好**；是 `SETUP FAILED` 就把整段输出给用户看。输出里列出的字体就是视频字幕会用的中英文字体，缺中文字体时要提醒用户。
 3. 先跑一遍示例验证：`video make <skill>/examples/kpx2 draft 05a`，几十秒后会生成 `examples/kpx2/out/draft_05a.mp4`。
 4. 提前告诉用户需要多少资源：磁盘约 2 GB；1080p 成片每分钟视频大约要渲染 20 到 60 分钟，主要看显卡。预览档大约是成片的一半。第一次渲染还要编译着色器，会更慢一些。
 
@@ -41,7 +41,7 @@ API 细节见 [reference.md](reference.md)，完整示例见 `examples/kpx2/`（
 ## 2. 整理资料
 
 - 把文件复制到工作目录。微信或 Windows 来的 zip 包，中文文件名常用 GBK 编码，解压时要修正。
-- PDF（报价单、说明书）用 `video pdf <文件>`，会得到每页图片、内嵌原图和全文文字。表格读出全部参数；照片做成缩略总览图（`video sheet <图片目录>`），逐张看过；参考视频用 `video frames <视频> [间隔秒数]` 抽帧，生成总览图后再看。
+- PDF（报价单、说明书）用 `video pdf <文件>`，会得到每页图片、内嵌原图和全文文字。内嵌原图（`img_*.png`）通常比整页截图清楚得多，看照片优先用它们。表格读出全部参数；照片做成缩略总览图（`video sheet <图片目录>`），逐张看过；参考视频用 `video frames <视频> [间隔秒数]` 抽帧，生成总览图后再看。
 - 写一份 `资料整理.md`：有哪些产品、关键尺寸和配置、哪些照片能用、**缺了什么**。
 
 ## 3. 推导安装步骤
@@ -66,6 +66,7 @@ API 细节见 [reference.md](reference.md)，完整示例见 `examples/kpx2/`（
 video make <产品目录> draft              全片快速预览（480p，隔帧）
 video make <产品目录> preview 05a,05b    只出某几个 shot（960p）
 video compose <产品目录>                 只改了字幕或音乐时用，不重新渲染
+video text <产品目录>                    列出每一屏的文字和英文单词数（写到 out/text.md），核对字幕时用
 ```
 每次出片后，**逐张看 `<产品目录>/out/review/*.jpg`**（每个 shot 6 帧，已叠好字幕），按下面这些检查：
 - 零件位置对不对？有没有穿模、悬空、露出不该露的东西？

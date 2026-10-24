@@ -13,44 +13,19 @@ OTHER_PIPES = ["downpipe_01", "downpipe_10", "downpipe_11"]
 OTHER_BOTS = ["bolt_01_bot_*", "bolt_10_bot_*", "bolt_11_bot_*"]
 OTHER_TOPS = ["bolt_01_top_*", "bolt_10_top_*", "bolt_11_top_*"]
 DOOR = ["front_wall_1_door", "front_door_*"]
+DOOR_LEAF = ["front_door_leaf", "front_door_handle"]
 WIN_F = ["front_wall_3_window", "front_window_*"]
 WIN_R = ["rear_wall_2_window", "rear_window_*"]
 CENTER = (0, 0, 1.3)
 
-def unit_copies(ctx):
-    """拼箱 / 叠箱：用集合实例复制整箱，逐个落下"""
-    import bpy
-    spots = [(0, m.W, 0), (0, 2 * m.W, 0), (0, 0, m.H), (0, m.W, m.H), (0, 2 * m.W, m.H)]
-    unit = bpy.data.collections.get("UNIT") or bpy.data.collections.new("UNIT")   # 只含箱体，不进场景
-    for o in list(unit.objects):
-        unit.objects.unlink(o)
-    for o in ctx.resolve(FULL[2:]):
-        unit.objects.link(o)
-    for k, (x, y, z) in enumerate(spots):
-        e = bpy.data.objects.get(f"copy_{k}") or bpy.data.objects.new(f"copy_{k}", None)
-        if e.name not in bpy.context.scene.collection.objects:
-            bpy.context.scene.collection.objects.link(e)
-        e.instance_type = "COLLECTION"
-        e.instance_collection = unit
-        e.animation_data_clear()
-        at = 1.0 + k * 0.6
-        for sec, h, hide in ((0, 2.0, True), (at, 2.0, False), (at + 1.2, 0.0, False)):
-            e.location = (x, y, z + h)
-            e.hide_render = e.hide_viewport = hide
-            e.keyframe_insert("location", frame=ctx.f(sec))
-            e.keyframe_insert("hide_render", frame=ctx.f(sec))
-            e.keyframe_insert("hide_viewport", frame=ctx.f(sec))
-        # 整个视频里只在本 shot 出现
-        e.hide_render = e.hide_viewport = True
-        e.keyframe_insert("hide_render", frame=ctx.f(8))
-        e.keyframe_insert("hide_viewport", frame=ctx.f(8))
+# 拼箱 / 叠箱：横向再拼 2 台，上面再叠 3 台（相对原箱的偏移）
+COMBO = [(0, m.W, 0), (0, 2 * m.W, 0), (0, 0, m.H), (0, m.W, m.H), (0, 2 * m.W, m.H)]
 
 
 SHOTS = [
     shot("00_intro", 4, title=("快拼箱 2.0 安装指南", "Quick-Assembly Container House 2.0 · Installation Guide"),
-         card=True, show=FULL,
-         cam=cam((0, 0, 0.5), (-40, -25), 14, (13, 11.5)),
-         notes=[note(1.0, 3, "外尺寸 6055 × 2990 × 2896 mm", "External size 6055 × 2990 × 2896 mm")]),
+         card=True, show=FULL, subtitle=("外尺寸 6055 × 2990 × 2896 mm", "External size 6055 × 2990 × 2896 mm"),
+         cam=cam((0, 0, 0.5), (-40, -25), 14, (13, 11.5))),
 
     shot("01_overview", 10, title=("结构组成", "Main components"),
          show=[x for x in FULL if x not in ("@08_trim", "@09_fasteners", "@10_services")],
@@ -130,7 +105,9 @@ SHOTS = [
 
     shot("08_openings", 8, title=("安装门窗", "Fit door and windows"), step=6,
          cam=cam(CENTER, (25, -10), 14, 10),
-         do=[move(DOOR, 0.4, 1.4, out=0.8), move(WIN_F, 1.4, 1.4, out=0.8), move(WIN_R, 1.6, 1.4, out=0.8, hl=False)],
+         do=[move(DOOR, 0.4, 1.4, out=0.8), move(WIN_F, 1.4, 1.4, out=0.8), move(WIN_R, 1.6, 1.4, out=0.8, hl=False),
+             rotate(DOOR_LEAF, 3.0, 1.0, axis="Z", edge="-x", frm=0, to=-70),       # 开门：绕铰链边转向外
+             rotate(DOOR_LEAF, 6.2, 1.0, axis="Z", edge="-x", frm=-70, to=0, hl=False)],
          callouts=[callout("front_door_leaf", 3.2, 4.6, "钢门 920 × 2030", "Steel door 920 × 2030", "up"),
                    callout("front_window_frame", 3.6, 4.2, "塑钢窗 1130 × 1100，带防盗杆", "uPVC window 1130 × 1100 with security bars", "right")]),
 
@@ -177,6 +154,6 @@ SHOTS = [
 
     shot("12_combo", 8, title=("拼箱与叠箱", "Combine and stack"),
          cam=cam((0, m.W, m.H), (-40, -30), 18, (20, 18)),
-         do=[unit_copies],
+         do=[copies(FULL[2:], COMBO, at=1.0, drop=2.0, dur=1.2, stagger=0.6)],
          notes=[note(4.0, 3.8, "可横向拼接，最多叠 3 层", "Join side by side; stack up to 3 storeys")]),
 ]
