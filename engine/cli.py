@@ -125,7 +125,10 @@ def cmd_init(args):
         raise SystemExit("产品目录名只能用字母、数字、下划线，且不以数字开头，例如 house_a")
     if os.path.exists(dst):
         raise SystemExit(f"{dst} 已存在")
-    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("out", "__pycache__"))
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("out", "__pycache__", "storyboard.md"))
+    with open(os.path.join(dst, "storyboard.md"), "w", encoding="utf-8") as fh:   # 分镜从空白开始，示例的留在 skill 里参考
+        fh.write("# 分镜 v1\n\n- 时长：\n- 画幅：\n- 字幕语言：\n\n"
+                 "| # | 段落 | 时长 | 画面 | 字幕 |\n|---|---|---|---|---|\n\n## 需要确认\n")
     print(f"created {dst}：改写 model.py / shots.py / storyboard.md，然后 video make {dst} draft")
 
 def cmd_frames(args):
