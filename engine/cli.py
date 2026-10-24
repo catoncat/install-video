@@ -138,7 +138,7 @@ def render_argv(args):
     from engine import scene
     if quality not in scene.QUALITY:
         raise SystemExit(f"质量档位只能是 {list(scene.QUALITY)}")
-    argv = [p, "--quality", quality, "--step", "1" if quality == "final" else "2"]
+    argv = [p, "--quality", quality, "--step", "2" if quality == "draft" else "1"]   # 只有 draft 隔帧；preview 也要 30fps，否则运动一卡一卡
     if len(args) > 2 and args[2]:
         argv += ["--shots", args[2]]
     return p, argv
@@ -163,9 +163,17 @@ def cmd_make(args):
     loud, args = verbose(args)
     want, args = opt(args, "--format")
     p, argv = render_argv(args)
-    for fmt in pick_formats(p, argv[2], want):
+    for k, fmt in enumerate(pick_formats(p, argv[2], want)):
         t = time.time()
-        run.main(argv + ["--no-render", "--format", fmt])
+        tl = run.main(argv + ["--no-render", "--format", fmt])
+        if k == 0:                       # 共面重叠（Z-fighting）会让画面逐帧闪烁，渲染前先查
+            from engine import tools
+            want_ids = argv[argv.index("--shots") + 1].split(",") if "--shots" in argv else None
+            mids = [(a + b) // 2 for s, a, b in tl.shots if not want_ids or any(s["id"].startswith(w) for w in want_ids)]
+            zf = tools.zfight(mids)
+            tools.report_zfight(zf, say)
+            if zf and argv[2] == "final" and "--force" not in sys.argv:
+                raise SystemExit("成片档不渲染有共面重叠的模型（会闪烁）。先按上面的列表把面错开，或者确认可以接受后加 --force")
         out = run.out_dir(p, fmt)
         frames = os.path.join(out, "frames")
         shutil.rmtree(frames, ignore_errors=True)
@@ -284,7 +292,11 @@ def cmd_check(args):
     """video check <产品> [帧号...]"""
     ensure_deps()
     from engine import tools
-    tools.check(product_dir(args[0]), [int(a) for a in args[1:]] or None)
+    hits = tools.check(product_dir(args[0]), [int(a) for a in args[1:]] or None)
+    from engine import anim
+    sc = __import__("bpy").context.scene
+    tools.report_zfight(tools.zfight(list(range(sc.frame_start, sc.frame_end + 1, 15))), limit=100)
+    return hits
 
 
 def cmd_sheet(args):

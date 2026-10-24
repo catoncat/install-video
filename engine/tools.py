@@ -240,3 +240,62 @@ def check(product, frames=None, every=6):
         print(f"  - {sa} × {sb}：{len(g['pairs'])} 对，{shot_of(f0)}（帧 {f0}–{f1}）。例：{eg}")
     print("  设计上本来就贴在一起的，给对象加 touch_ok=True 或 touch_ok=\"名字通配\" 放过")
     return hits
+
+
+def zfight(frames, objs=None, tol=0.0015, min_area=4e-4):
+    """共面重叠检查（Z-fighting）：两个零件朝向相同的面落在同一平面（距离 < tol 米）且在平面内有重叠，
+       渲染时 GPU 每帧可能挑不同的面显示，画面闪烁，描边还会放大成"抖动的线"。返回 [(a, b, 帧, 位置)]。"""
+    from collections import defaultdict
+    from mathutils import Vector
+    from engine import anim
+    sc = bpy.context.scene
+    objs = objs or [o for o in anim.model_objects() if o.type == "MESH"]
+    found = {}
+    for fr in frames:
+        sc.frame_set(fr)
+        dg = bpy.context.evaluated_depsgraph_get()
+        buckets = defaultdict(list)
+        for o in objs:
+            if o.hide_render:
+                continue
+            me = o.evaluated_get(dg).data
+            mw = o.matrix_world
+            nm = mw.to_3x3().inverted_safe().transposed()
+            for p in me.polygons:
+                if p.area < 1e-6:
+                    continue
+                n = (nm @ p.normal).normalized()    # 只比朝向相同的面：背对背贴合的面（如零件压在底座上）看不见，不会闪
+                pts = [mw @ me.vertices[i].co for i in p.vertices]
+                d = n.dot(pts[0])
+                key = (round(n.x, 2), round(n.y, 2), round(n.z, 2), round(d / tol))
+                buckets[key].append((o, n, pts))
+        for key, faces in buckets.items():
+            if len(faces) < 2 or len({id(f[0]) for f in faces}) < 2:
+                continue
+            for i in range(len(faces)):
+                oa, n, pa = faces[i]
+                u = (pa[1] - pa[0]).normalized()
+                v = n.cross(u)
+                ra = [(q.dot(u), q.dot(v)) for q in pa]
+                for j in range(i + 1, len(faces)):
+                    ob, _, pb = faces[j]
+                    if ob is oa or (oa.name, ob.name) in found or (ob.name, oa.name) in found:
+                        continue
+                    rb = [(q.dot(u), q.dot(v)) for q in pb]
+                    w = min(max(x for x, _ in ra), max(x for x, _ in rb)) - max(min(x for x, _ in ra), min(x for x, _ in rb))
+                    h = min(max(y for _, y in ra), max(y for _, y in rb)) - max(min(y for _, y in ra), min(y for _, y in rb))
+                    if w > 0.01 and h > 0.01 and w * h > min_area:
+                        c = sum(pa, Vector()) / len(pa)
+                        found[(oa.name, ob.name)] = (fr, tuple(round(x, 2) for x in c))
+    return [(a, b, fr, c) for (a, b), (fr, c) in found.items()]
+
+
+def report_zfight(hits, say=print, limit=8):
+    if not hits:
+        return
+    say(f"警告：{len(hits)} 对零件有共面重叠的面（Z-fighting），这些地方会逐帧闪烁、描边会抖。"
+        f"把其中一个面错开 2 mm 以上，或者合并成一个零件：")
+    for a, b, fr, c in hits[:limit]:
+        say(f"  - {a} × {b}（帧 {fr}，约在 {c}）")
+    if len(hits) > limit:
+        say(f"  ……还有 {len(hits) - limit} 对，运行 video check 看完整列表")
