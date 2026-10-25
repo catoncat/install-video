@@ -22,6 +22,7 @@ def compose(out, product_dir):
     music_file = next(iter(sorted(glob.glob(os.path.join(product_dir, "music.*")))), None)
 
     video = encode(out, tl, files, fps, tl.get("name", "video"), music_file)
+    publish(video, tl, product_dir)
     review(out, tl, video, nums)
     report_modules(tl, [s["id"] for s in tl["shots"]], f"片子 {tl['version']} " if tl.get("version") else "全片")
 
@@ -92,6 +93,21 @@ def encode(out, tl, files, fps, name, music_file=None):
     check(video, (w, h), last, fps)
     say(f"video: {video}  ({w}x{h}, {dur:.1f}s @ {fps}fps, music: {os.path.basename(track)})")
     return video
+
+
+def publish(video, tl, product_dir):
+    """完整的片子（不是只渲了几个 shot 的小样）复制到产品目录第一层，用户打开产品文件夹就能看到：
+       成片 <产品>_<版本>_<画幅>.mp4，预览 预览_<版本>.mp4"""
+    import shutil
+    if tl.get("shots_arg"):
+        return
+    ver = tl.get("version") or "main"
+    fmt = tl.get("format", "16:9").replace(":", "x")
+    name = (f"{os.path.basename(os.path.normpath(product_dir))}_{ver}_{fmt}.mp4" if tl.get("quality") == "final"
+            else f"预览_{ver}.mp4")
+    dst = os.path.join(product_dir, name)
+    shutil.copyfile(video, dst)
+    say(f"成片已放到产品目录：{dst}")
 
 
 def check_target(key, dur, target):

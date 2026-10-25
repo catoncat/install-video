@@ -22,7 +22,12 @@ git clone https://github.com/catoncat/install-video <任意目录>/install-video
 
 ## 用法
 
-见 [SKILL.md](SKILL.md)（工作流程）和 [reference.md](reference.md)（API）。示例产品在 `examples/kpx2/`（快拼箱 2.0）。
+见 [SKILL.md](SKILL.md)（工作流程）和 [reference.md](reference.md)（API）。
+
+示例产品（完整的模型 + 分镜，可以直接出片，也可以照着改）：
+- `examples/expandable_house/`：可扩展集装箱房，国际站营销片三条（主图 16:9、详情页 1:1、广告 9:16），展开动作用具名姿态 `pose` / `to_pose`
+- `examples/zfold/`：Z 型折叠集装箱房，营销片三条，铰链折叠用自定义动画函数
+- `examples/kpx2/`：快拼箱 2.0，中英双语安装说明版
 
 ```
 video init <工作目录>/<产品名>          新建产品（国际站营销模板；加 kpx2 是说明版示例）

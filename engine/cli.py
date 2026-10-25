@@ -192,6 +192,18 @@ def cmd_make(args):
     ver, args = opt(args, "--version")
     p, argv = render_argv(args)
     todo = jobs(p, want, ver) or [(f, None, None) for f in pick_formats(p, argv[2], want)]
+    if "--shots" in argv and len(todo) > 1:      # 只渲几个 shot：跳过不含这些 shot 的版本，全都不含才报错
+        pre = argv[argv.index("--shots") + 1].split(",")
+        shots = run.load(p)[-1]
+        uses = run.use_versions(shots) or {}
+        keep = [j for j in todo if not j[1] or any(s["id"].startswith(w) for s in run.version_shots(shots, j[1], uses[j[1]])
+                                                     for w in pre)]
+        if not keep:
+            raise SystemExit(f"--shots {','.join(pre)} 在所有版本里都没匹配到 shot")
+        for j in todo:
+            if j not in keep:
+                say(f"版本 {j[1]} 里没有这些 shot，跳过")
+        todo = keep
     for k, (fmt, vname, same_as) in enumerate(todo):
         vflag = ["--version", vname] if vname else []
         if same_as:
