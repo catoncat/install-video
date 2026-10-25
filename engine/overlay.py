@@ -270,7 +270,7 @@ def text_report(out):
     path = os.path.join(out, "text.md")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines))
-    say(f"text: {path}（{len(segs)} 屏{f'，{over} 屏超过 {limit} 个英文单词' if over else ''}）")
+    say(f"字幕统计：{path}（{len(segs)} 屏{f'，{over} 屏超过 {limit} 个英文单词' if over else ''}）")
     if over:
         say(f"警告：{over} 屏英文超过 {limit} 个单词，打开 text.md 搜「超过上限」看是哪几屏")
     return over
@@ -278,10 +278,11 @@ def text_report(out):
 
 def main(out):
     tl = json.load(open(os.path.join(out, "timeline.json"), encoding="utf-8"))
-    frames_dir, ov_dir = os.path.join(out, "frames"), os.path.join(out, "overlay")
+    from .compose import frame_list
+    ov_dir = os.path.join(out, "overlay")
     shutil.rmtree(ov_dir, ignore_errors=True)
     os.makedirs(ov_dir)
-    files = sorted(f for f in os.listdir(frames_dir) if f.endswith(".png"))
+    files = [f"f_{n:04d}.png" for n in frame_list(out, tl.get("name", "video"))[0]]   # 有渲染帧用渲染帧，否则按底片的帧号
     w, h = tl["size"]                  # 输出尺寸（渲染帧是超采样的大图）
     items = prepare(tl)
     seen = {}
@@ -310,7 +311,7 @@ def main(out):
                 draw_callout(P, it, a, fr)
         P.result(w, h).save(dst)
         seen[key] = dst
-    say(f"overlay: {len(files)} frames, {len(set(seen.values()))} unique")
+    say(f"字幕层：{len(files)} 帧（不同的 {len(set(seen.values()))} 张）")
     if FITTED:
         say("提示：下面这些文字一行放不下，已自动折行或缩小字号，看 review 图确认效果；想要更整齐就改短：")
         for t in sorted(FITTED):

@@ -3,14 +3,14 @@
 
   video setup                                   首次使用：装依赖到 .deps/，检查字体，再渲染一个示例镜头自检
   video init <工作目录>/<产品名> [kpx2]          新建产品：默认是国际站营销视频模板；加 kpx2 复制中英说明版示例
-  video make <产品目录> [preview|final] [shot前缀,...] [--version ad] [--format 9:16|all]
-                                                渲染 → 字幕层 → 合成 MP4 → 自查拼图。按用途出片（VERSIONS 写了
-                                                format）时每个版本单独渲染，输出到 out/<版本>/；--version 只做一个。
+  video make <产品目录> [preview|final] [shot前缀,...] [--version ad] [--keep-frames]
+                                                渲染 → 字幕层 → 合成 MP4 → 自查拼图。每个版本（VERSIONS，一条片子，
+                                                有自己的画幅和镜头）输出到 out/<版本>/<档位>.mp4；--version 只做一条。
                                                 preview：960p，自查和给用户看；final：1080p 成片，用户点头后再出。
-                                                老写法（FORMATS）：preview 只出第一个画幅，final 出全部
-  video compose <产品目录> [--format ...]        只重做字幕和合成（改了字幕、版本或音乐，不用重新渲染）
-  video text <产品目录>                         列出每一屏同时出现的文字、英文单词数、宽度（写到 out/<画幅>/text.md）
-  加 -v（或环境变量 VIDEO_VERBOSE=1）显示 Blender 的完整输出；默认只显示摘要，完整日志在 out/log.txt
+                                                合成完会删掉逐帧 PNG，只留底片 plate_*.mp4；--keep-frames 保留
+  video compose <产品目录> [--version ad]       只重做字幕和合成（改了字幕或音乐，用底片，不用重新渲染）
+  video text <产品目录>                         列出每一屏同时出现的文字、英文单词数、宽度（写到 out/<版本>/text.md）
+  加 -v（或环境变量 VIDEO_VERBOSE=1）显示 Blender 的完整输出；默认只显示摘要，完整日志在 out/<版本>/log.txt
   video frames <视频文件> [间隔秒数]             参考视频抽帧并生成总览图
   video sheet <图片目录>                        照片总览图（带文件名），方便逐张看
   video check <产品目录> [帧号...]              穿模检查：动起来的零件和别的零件有没有相交
@@ -39,7 +39,7 @@ def ensure_deps():
             missing.append(pkg)
     if not missing:
         return
-    print(f"installing {' '.join(missing)} into .deps/ ...")
+    print(f"正在安装 {' '.join(missing)} 到 .deps/ ...")
     py = sys.executable
     if subprocess.run([py, "-m", "pip", "--version"], capture_output=True).returncode != 0:
         subprocess.run([py, "-m", "ensurepip", "--user"], check=True)
@@ -68,10 +68,10 @@ def cmd_setup(_):
         import bpy
         from engine import overlay
         for k, (path, idx) in overlay.FONTS.items():
-            print(f"font {k}: {path} [{idx}]")
+            print(f"字体 {k}：{path} [{idx}]")
         if bpy.app.version < (4, 4, 0):
             raise RuntimeError(f"Blender {bpy.app.version_string} 太旧，需要 4.4 以上")
-        print(f"blender {bpy.app.version_string} | python {sys.version.split()[0]}")
+        print(f"Blender {bpy.app.version_string}，Python {sys.version.split()[0]}")
         print("自检：用示例渲染一个镜头（约半分钟）...", flush=True)
         tmp = tempfile.mkdtemp(prefix="video_selftest_")
         demo = os.path.join(tmp, "kpx2")
@@ -81,14 +81,14 @@ def cmd_setup(_):
                               stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         for line in pr.stdout:
             log.append(line.rstrip())
-        if pr.wait() or not os.path.exists(os.path.join(demo, "out", "16x9", "preview_16x9_05a.mp4")) \
-                or not os.path.exists(os.path.join(demo, "out", "16x9", "review", "05a_post.jpg")):
+        if pr.wait() or not os.path.exists(os.path.join(demo, "out", "main", "preview_05a.mp4")) \
+                or not os.path.exists(os.path.join(demo, "out", "main", "review", "05a_post.jpg")):
             raise RuntimeError("示例渲染自检失败，最后的输出：\n" + "\n".join(log))
         shutil.rmtree(tmp, ignore_errors=True)
     except Exception as e:
-        print(f"SETUP FAILED: {e}", flush=True)
+        print(f"SETUP FAILED（安装自检失败）：{e}", flush=True)
         os._exit(1)            # 直接退出，让这一行就是最后一行（Blender 正常退出还会再打印两行）
-    print("SETUP OK", flush=True)
+    print("SETUP OK（安装和自检都通过了）", flush=True)
     os._exit(0)
 
 
@@ -148,74 +148,57 @@ def render_argv(args):
         argv += ["--shots", args[2]]
     return p, argv
 
-def pick_formats(p, quality, want):
-    """--format all / 某个画幅；不给时 final 出全部，preview 只出第一个"""
+def jobs(p, want_ver):
+    """要渲染的片子：[(版本名, 和哪个版本完全一样或 None)]。画幅和镜头序列都相同的只渲一次"""
     from engine import run
     shots = run.load(p)[-1]
-    fs = run.formats(shots)
-    if want == "all":
-        return fs
-    if want:
-        return [want]
-    return fs if quality == "final" else fs[:1]
-
-def jobs(p, want_fmt, want_ver):
-    """要渲染的片子：[(画幅, 版本名或 None)]。按用途出片时每个版本一条（相同画幅 + 相同镜头序列的只渲一次）"""
-    from engine import run
-    shots = run.load(p)[-1]
-    uses = run.use_versions(shots)
-    if not uses:
-        return None
-    names = [want_ver] if want_ver else list(uses)
+    vers = run.plan(shots)
+    names = [want_ver] if want_ver else list(vers)
     out, seen = [], {}
     for n in names:
-        if n not in uses:
-            raise SystemExit(f"没有版本 {n!r}，VERSIONS 里有：{list(uses)}")
-        key = (uses[n]["format"], tuple(s["id"] for s in run.version_shots(shots, n, uses[n])))
+        if n not in vers:
+            raise SystemExit(f"没有版本 {n!r}，VERSIONS 里有：{list(vers)}")
+        key = (vers[n]["format"], tuple(s["id"] for s in run.version_shots(shots, n, vers[n])))
         if key in seen:
             print(f"» 版本 {n} 和 {seen[key]} 画幅、镜头完全一样，只渲一次（拷贝 {seen[key]} 的成片）")
-            out.append((uses[n]["format"], n, seen[key]))
-            continue
-        seen[key] = n
-        out.append((uses[n]["format"], n, None))
-    return out
+        out.append((n, seen.get(key)))
+        seen.setdefault(key, n)
+    return out, vers
 
 def cmd_make(args):
-    """每条片子（画幅，或按用途的版本）：主进程导出时间线、清空帧目录，开 N 个 Blender 进程一起渲染，
-       最后在新进程里合成"""
+    """每条片子（版本）：主进程导出时间线、清空帧目录，开 N 个 Blender 进程一起渲染，最后在新进程里合成"""
     ensure_deps()
     import shutil
     from engine import run
     from engine.log import say
     loud, args = verbose(args)
-    want, args = opt(args, "--format")
     ver, args = opt(args, "--version")
+    if "--keep-frames" in args:
+        args = [a for a in args if a != "--keep-frames"]
+        os.environ["VIDEO_KEEP_FRAMES"] = "1"           # 合成子进程继承
     p, argv = render_argv(args)
-    todo = jobs(p, want, ver) or [(f, None, None) for f in pick_formats(p, argv[2], want)]
+    todo, vers = jobs(p, ver)
     if "--shots" in argv and len(todo) > 1:      # 只渲几个 shot：跳过不含这些 shot 的版本，全都不含才报错
         pre = argv[argv.index("--shots") + 1].split(",")
         shots = run.load(p)[-1]
-        uses = run.use_versions(shots) or {}
-        keep = [j for j in todo if not j[1] or any(s["id"].startswith(w) for s in run.version_shots(shots, j[1], uses[j[1]])
-                                                     for w in pre)]
+        keep = [j for j in todo if any(s["id"].startswith(w) for s in run.version_shots(shots, j[0], vers[j[0]])
+                                       for w in pre)]
         if not keep:
             raise SystemExit(f"--shots {','.join(pre)} 在所有版本里都没匹配到 shot")
         for j in todo:
             if j not in keep:
-                say(f"版本 {j[1]} 里没有这些 shot，跳过")
+                say(f"版本 {j[0]} 里没有这些 shot，跳过")
         todo = keep
-    for k, (fmt, vname, same_as) in enumerate(todo):
-        vflag = ["--version", vname] if vname else []
+    for k, (vname, same_as) in enumerate(todo):
         if same_as:
-            src = run.out_dir(p, fmt, same_as)
-            dst = run.out_dir(p, fmt, vname)
+            src, dst = run.out_dir(p, same_as), run.out_dir(p, vname)
             os.makedirs(dst, exist_ok=True)
             for f in os.listdir(src):
-                if f.endswith(".mp4"):
-                    shutil.copy(os.path.join(src, f), os.path.join(dst, f.replace(same_as, vname)))
+                if f.endswith(".mp4") and not f.startswith("plate_"):
+                    shutil.copy(os.path.join(src, f), os.path.join(dst, f))
             continue
         t = time.time()
-        tl = run.main(argv + ["--no-render", "--format", fmt] + vflag)
+        tl = run.main(argv + ["--no-render", "--version", vname])
         if k == 0:                       # 共面重叠（Z-fighting）会让画面逐帧闪烁，渲染前先查
             from engine import tools
             want_ids = argv[argv.index("--shots") + 1].split(",") if "--shots" in argv else None
@@ -224,7 +207,7 @@ def cmd_make(args):
             tools.report_zfight(zf, say)
             if zf and argv[2] == "final" and "--force" not in sys.argv:
                 raise SystemExit("成片档不渲染有共面重叠的模型（会闪烁）。先按上面的列表把面错开，或者确认可以接受后加 --force")
-        out = run.out_dir(p, fmt, vname)
+        out = run.out_dir(p, vname)
         frames = os.path.join(out, "frames")
         shutil.rmtree(frames, ignore_errors=True)
         os.makedirs(frames)
@@ -232,7 +215,7 @@ def cmd_make(args):
         open(log, "w").close()
         n = workers()
         out_to = None if loud else open(log, "a", encoding="utf-8")
-        procs = [subprocess.Popen(blender_cmd() + ["worker", f"{i}/{n}", *args, "--format", fmt] + vflag, stdout=out_to,
+        procs = [subprocess.Popen(blender_cmd() + ["worker", f"{i}/{n}", *args, "--version", vname], stdout=out_to,
                                   stderr=subprocess.STDOUT) for i in range(n)]
         failed = [pr.wait() for pr in procs]
         if out_to:
@@ -241,61 +224,55 @@ def cmd_make(args):
             if not loud:
                 print("".join(deque(open(log, encoding="utf-8", errors="replace"), maxlen=30)))
             raise SystemExit(f"渲染进程出错，完整日志：{log}")
-        say(f"render {vname or fmt}: {time.time() - t:.0f}s with {n} workers")
+        say(f"渲染 {vname}（{vers[vname]['format']}）：{time.time() - t:.0f} 秒，{n} 个进程")
         # 合成放到干净的新进程：本进程已搭过 3D 场景，残留状态会让截帧变黑
         run_logged(blender_cmd() + ["_compose", out, p], log, loud)
         say(f"完整日志：{log}")
 
 def cmd_worker(args):
-    """args: <第几个/共几个> <产品> <质量> [shots] --format <画幅>"""
+    """args: <第几个/共几个> <产品> <质量> [shots] --version <版本>"""
     ensure_deps()
     from engine import run
-    fmt, args = opt(args, "--format")
     ver, args = opt(args, "--version")
     _, argv = render_argv(args[1:])
-    run.main(argv + ["--part", args[0], "--format", fmt] + (["--version", ver] if ver else []))
+    run.main(argv + ["--part", args[0], "--version", ver])
 
 
 def cmd_text(args):
     ensure_deps()
     from engine import run, overlay
-    want, args = opt(args, "--format")
     ver, args = opt(args, "--version")
     p = product_dir(args[0])
-    uses = run.use_versions(run.load(p)[-1])
-    for vname in ([ver] if ver else list(uses)) if uses else [None]:
-        fmt = uses[vname]["format"] if uses else (want or run.formats(run.load(p)[-1])[0])
-        run.main([p, "--no-render", "--quality", "preview", "--format", fmt] + (["--version", vname] if vname else []))
-        overlay.text_report(run.out_dir(p, fmt, vname))
+    for vname in [ver] if ver else list(run.plan(run.load(p)[-1])):
+        run.main([p, "--no-render", "--quality", "preview", "--version", vname])
+        overlay.text_report(run.out_dir(p, vname))
 
 
 def cmd_compose(args):
-    """改了字幕 / 版本 / 音乐后重新合成：先按上次的档位重新导出时间线（新进程），再合成（再一个新进程）"""
+    """改了字幕 / 音乐后重新合成：先按上次的档位重新导出时间线（新进程），再用底片合成（再一个新进程）"""
     ensure_deps()
     import glob, json
     loud, args = verbose(args)
-    want, args = opt(args, "--format")
+    ver, args = opt(args, "--version")
     p = product_dir(args[0])
-    from engine.scene import tag
-    outs = [os.path.join(p, "out", tag(want))] if want else sorted(os.path.dirname(f) for f in
-                                                                   glob.glob(os.path.join(p, "out", "*", "timeline.json")))
+    outs = [os.path.join(p, "out", ver)] if ver else sorted(os.path.dirname(f) for f in
+                                                            glob.glob(os.path.join(p, "out", "*", "timeline.json")))
     if not outs:
         raise SystemExit("还没有渲染过，先运行 video make")
     for out in outs:
         tl = json.load(open(os.path.join(out, "timeline.json"), encoding="utf-8"))
         log = os.path.join(out, "log.txt")
-        run_logged(blender_cmd() + ["_export", p, tl["quality"], tl.get("shots_arg", ""), "--format", tl["format"]]
-                   + (["--version", tl["version"]] if tl.get("version") else []), log, loud)
+        run_logged(blender_cmd() + ["_export", p, tl["quality"], tl.get("shots_arg", ""), "--version", tl["version"]],
+                   log, loud)
         run_logged(blender_cmd() + ["_compose", out, p], log, loud)
 
 def cmd_export(args):
     """内部：只重新导出时间线（字幕、标注位置），不渲染"""
     ensure_deps()
     from engine import run
-    fmt, args = opt(args, "--format")
     ver, args = opt(args, "--version")
     _, argv = render_argv(args)
-    run.main(argv + ["--no-render", "--format", fmt] + (["--version", ver] if ver else []))
+    run.main(argv + ["--no-render", "--version", ver])
 
 def cmd_compose_only(args):
     """内部：字幕层 + 合成 + 版本 + 自查，在干净进程里跑。args: <out 目录> <产品目录>"""
@@ -324,7 +301,7 @@ def cmd_init(args):
             shutil.copy(os.path.join(ROOT, "examples", "kpx2", f), dst)
         for f in os.listdir(tpl):
             shutil.copy(os.path.join(tpl, f), dst)
-    print(f"created {dst}：改写 model.py / shots.py / storyboard.md，然后 video make {dst} preview")
+    print(f"已创建 {dst}：改写 model.py / shots.py / storyboard.md，然后运行 video make {dst} preview")
 
 def cmd_frames(args):
     ensure_deps()

@@ -48,7 +48,7 @@ def setup(quality="preview", style=None, fmt="16:9"):
     try:
         sc.render.engine = "BLENDER_EEVEE"
     except TypeError as e:
-        print("engine:", e)
+        print("渲染引擎：", e)
     sc.render.resolution_x, sc.render.resolution_y = design(fmt)
     sc.render.resolution_percentage = pct * SS
     sc.render.fps = 30

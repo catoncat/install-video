@@ -1,53 +1,55 @@
-"""合成（在 Blender 里运行，不需要 ffmpeg）：渲染帧 + 字幕层 + 音乐 → out/<画幅>/<档位>_<画幅>[_<shots>].mp4，
-各个版本（VERSIONS）→ ..._<版本>.mp4；再按 shot 生成关键帧拼图 out/<画幅>/review/<shot>.jpg，供 agent 自查。
+"""合成（在 Blender 里运行，不需要 ffmpeg）：渲染帧 → 无字幕的底片 out/<版本>/plate_<名>.mp4，
+再用 底片 + 字幕层 + 音乐 → out/<版本>/<名>.mp4（名 = 档位[_shots]），按 shot 生成自查拼图 review/<shot>.jpg。
+全部成功后删掉逐帧 PNG 和字幕层（--keep-frames 或 VIDEO_KEEP_FRAMES=1 保留）；以后只改字幕、音乐时，
+video compose 直接用底片重新合成，不用重渲。
 
 音乐：产品目录下有 music.*（mp3/wav/m4a/ogg）就用它，没有就用 music.py 程序合成。
 """
-import os, glob, json
+import os, glob, json, shutil
 import bpy
 from PIL import Image, ImageDraw, ImageChops, ImageStat
 from . import music, overlay
 from .log import say
 
 
-def compose(out, product_dir):
-    """全片 + 各个版本（VERSIONS）都从同一批渲染帧合成，不重新渲染"""
-    tl = json.load(open(os.path.join(out, "timeline.json"), encoding="utf-8"))
+def frame_list(out, name):
+    """渲染帧号和帧率：有逐帧 PNG 就从文件名取，否则读底片旁边的 plate_<名>.json"""
     files = sorted(glob.glob(os.path.join(out, "frames", "f_*.png")))
-    if not files:
-        raise RuntimeError(f"{out}/frames 里没有渲染好的帧")
-    nums = [int(os.path.basename(f)[2:-4]) for f in files]
-    step = nums[1] - nums[0] if len(nums) > 1 else 1
-    fps = round(tl["fps"] / step)
-    music_file = next(iter(sorted(glob.glob(os.path.join(product_dir, "music.*")))), None)
+    if files:
+        nums = [int(os.path.basename(f)[2:-4]) for f in files]
+        return nums, files
+    meta = os.path.join(out, f"plate_{name}.json")
+    if not os.path.exists(meta):
+        raise RuntimeError(f"{out} 里既没有渲染帧也没有底片，先运行 video make")
+    return json.load(open(meta, encoding="utf-8"))["nums"], None
 
-    video = encode(out, tl, files, fps, tl.get("name", "video"), music_file)
+
+def compose(out, product_dir):
+    tl = json.load(open(os.path.join(out, "timeline.json"), encoding="utf-8"))
+    name = tl.get("name", "video")
+    nums, files = frame_list(out, name)
+    fps = tl["fps"]
+    plate = os.path.join(out, f"plate_{name}.mp4")
+    if files:                                   # 刚渲染完：先把帧压成底片
+        encode(plate, tl, fps, frames=files)
+        json.dump(dict(nums=nums, fps=fps), open(os.path.join(out, f"plate_{name}.json"), "w"))
+    music_file = next(iter(sorted(glob.glob(os.path.join(product_dir, "music.*")))), None)
+    video = encode(os.path.join(out, name + ".mp4"), tl, fps, plate=plate, overlays=[
+        os.path.join(out, "overlay", f"f_{n:04d}.png") for n in nums], music_file=music_file)
     publish(video, tl, product_dir)
     review(out, tl, video, nums)
-    report_modules(tl, [s["id"] for s in tl["shots"]], f"片子 {tl['version']} " if tl.get("version") else "全片")
-
-    by_shot = {s["id"]: s for s in tl["shots"]}
-    for key, v in tl.get("versions", {}).items():
-        if v["shots"] is None:             # 全片本身（只渲了部分 shot 时不检查时长）
-            if not tl.get("shots_arg"):
-                check_target(key, len(files) / fps, v["target"])
-            continue
-        ids = [sid for sid in by_shot if any(sid.startswith(p) for p in v["shots"])]
-        want = [n for sid in ids for n in nums if by_shot[sid]["start"] <= n <= by_shot[sid]["end"]]
-        rendered = {sid for sid in by_shot if any(by_shot[sid]["start"] <= n <= by_shot[sid]["end"] for n in nums)}
-        if not ids or not set(ids) <= rendered:
-            say(f"版本 {key}：这次没有渲染到它用的全部 shot，跳过（出全片时会合成）")
-            continue
-        sub = [files[nums.index(n)] for n in want]
-        encode(out, tl, sub, fps, f"{tl.get('name', 'video')}_{key}", music_file)
-        check_target(key, len(sub) / fps, v["target"])
-        report_modules(tl, ids, f"版本 {key}")
+    report_modules(tl, [s["id"] for s in tl["shots"]], f"片子 {tl.get('version', '')} ")
+    if not tl.get("shots_arg"):
+        check_target(tl.get("version", ""), len(nums) / fps, tl.get("target"))
+    if os.environ.get("VIDEO_KEEP_FRAMES") != "1":   # 底片在，逐帧 PNG 和字幕层不再需要
+        for d in ("frames", "overlay"):
+            shutil.rmtree(os.path.join(out, d), ignore_errors=True)
+    size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(out) for f in fs)
+    say(f"输出目录 {out} 共 {size / 1e6:.0f} MB")
 
 
-def encode(out, tl, files, fps, name, music_file=None):
-    """帧序列 + 对应的字幕层 + 音乐 → out/<name>.mp4，并核对尺寸、帧数、帧率"""
-    dur = len(files) / fps
-    track = music_file or music.generate(os.path.join(out, f"music_{name}.wav"), dur + 0.5, **tl.get("music", {}))
+def encode(path, tl, fps, frames=None, plate=None, overlays=None, music_file=None):
+    """frames（渲染帧，生成底片）或 plate（底片）+ 字幕层 + 音乐 → path，并核对尺寸、帧数、帧率"""
     w, h = tl["size"]
     sc = bpy.data.scenes.get("COMPOSE") or bpy.data.scenes.new("COMPOSE")
     r = sc.render
@@ -58,21 +60,27 @@ def encode(out, tl, files, fps, name, music_file=None):
     for s in list(strips):
         strips.remove(s)
 
-    def seq(label, folder, channel):
-        st = strips.new_image(label, os.path.join(out, folder, os.path.basename(files[0])), channel, 1, fit_method="FIT")
-        for f in files[1:]:
+    def seq(label, paths, channel):
+        st = strips.new_image(label, paths[0], channel, 1, fit_method="FIT")
+        for f in paths[1:]:
             st.elements.append(os.path.basename(f))
         if hasattr(st, "transform") and "BOX" in [i.identifier for i in st.transform.bl_rna.properties["filter"].enum_items]:
             st.transform.filter = "BOX"      # 超采样大图缩小用盒式滤波
         return st
-    seq("frames", "frames", 1)
-    ov = seq("overlay", "overlay", 2)
-    ov.blend_type = "ALPHA_OVER"
-    snd = strips.new_sound("music", track, 3, 1)
-    last = len(files)
-    for fr, v in ((1, 0.0), (int(fps * 0.8), 1.0), (max(2, last - int(fps * 2.5)), 1.0), (last, 0.0)):
-        snd.volume = v
-        snd.keyframe_insert("volume", frame=fr)
+    if frames:
+        last = len(frames)
+        seq("frames", frames, 1)
+    else:
+        last = strips.new_movie("plate", plate, 1, 1, fit_method="FIT").frame_final_duration
+        ov = seq("overlay", overlays, 2)
+        ov.blend_type = "ALPHA_OVER"
+        dur = last / fps
+        track = music_file or music.generate(os.path.join(os.path.dirname(path), "music.wav"), dur + 0.5,
+                                             **tl.get("music", {}))
+        snd = strips.new_sound("music", track, 3, 1)
+        for fr, v in ((1, 0.0), (int(fps * 0.8), 1.0), (max(2, last - int(fps * 2.5)), 1.0), (last, 0.0)):
+            snd.volume = v
+            snd.keyframe_insert("volume", frame=fr)
 
     r.fps, r.fps_base = fps, 1
     sc.frame_start, sc.frame_end = 1, last
@@ -82,17 +90,19 @@ def encode(out, tl, files, fps, name, music_file=None):
     r.image_settings.file_format = "FFMPEG"
     ff = r.ffmpeg
     ff.format, ff.codec = "MPEG4", "H264"
-    ff.constant_rate_factor, ff.ffmpeg_preset = "HIGH", "GOOD"
-    ff.audio_codec, ff.audio_bitrate, ff.audio_channels, ff.audio_mixrate = "AAC", 192, "STEREO", 44100
-    video = os.path.join(out, name + ".mp4")
-    if os.path.exists(video):
-        os.remove(video)
-    r.filepath = video
+    ff.constant_rate_factor, ff.ffmpeg_preset = ("PERC_LOSSLESS" if frames else "HIGH"), "GOOD"
+    ff.audio_codec = "NONE" if frames else "AAC"
+    if not frames:
+        ff.audio_bitrate, ff.audio_channels, ff.audio_mixrate = 192, "STEREO", 44100
+    if os.path.exists(path):
+        os.remove(path)
+    r.filepath = path
     r.use_file_extension = False
     bpy.ops.render.render(animation=True, scene=sc.name)
-    check(video, (w, h), last, fps)
-    say(f"video: {video}  ({w}x{h}, {dur:.1f}s @ {fps}fps, music: {os.path.basename(track)})")
-    return video
+    check(path, (w, h), last, fps)
+    if not frames:
+        say(f"成片：{path}（{w}×{h}，{last / fps:.1f} 秒，{fps}fps，音乐：{os.path.basename(track)}）")
+    return path
 
 
 def publish(video, tl, product_dir):
@@ -112,7 +122,7 @@ def publish(video, tl, product_dir):
 
 def check_target(key, dur, target):
     if target and not target[0] <= dur <= target[1]:
-        say(f"警告：版本 {key} 时长 {dur:.1f}s，不在目标 {target[0]}–{target[1]}s 之内")
+        say(f"警告：{key} 时长 {dur:.1f} 秒，不在目标 {target[0]}–{target[1]} 秒之内")
 
 
 def report_modules(tl, ids, label):
@@ -143,9 +153,8 @@ def check(video, size, frames, fps):
 
 
 def review(out, tl, video, nums, per=6, tw=640):
-    """按 shot 各取 per 帧，拼成 3 列：out/review/<shot>.jpg。自查（纯色帧、整条一样）用从成片里截的帧，
-       所以合成、缩放、字幕层的问题都能发现；成片宽度不到 960（方屏、竖屏的 preview）时，拼图改用内部渲染的高清帧
-       （2 倍超采样）叠字幕层，特写里的小零件也看得清。"""
+    """按 shot 各取 per 帧，拼成 3 列：out/<版本>/review/<shot>.jpg。拼图和自查（纯色帧、整条一样）都用从成片里
+       截的帧，所以合成、缩放、字幕层的问题都能发现。"""
     from . import tools
     rdir = os.path.join(out, "review")
     os.makedirs(rdir, exist_ok=True)
@@ -164,13 +173,6 @@ def review(out, tl, video, nums, per=6, tw=640):
         tiles = []
         for n in ns:
             im = Image.open(grabbed[index[n]]).convert("RGB")
-            raw = os.path.join(out, "frames", f"f_{n:04d}.png")
-            if im.size[0] < 960 and os.path.exists(raw):
-                hd = Image.open(raw).convert("RGBA")
-                ov = os.path.join(out, "overlay", f"f_{n:04d}.png")
-                if os.path.exists(ov):
-                    hd.alpha_composite(Image.open(ov).convert("RGBA").resize(hd.size, Image.LANCZOS))
-                im = hd.convert("RGB")
             im.thumbnail((tw, tw))
             ImageDraw.Draw(im).text((8, im.size[1] - 26), f"{sid}  f{n}  {(n - s['start']) / tl['fps']:.1f}s",
                                     fill=(255, 0, 80), font=lab)
@@ -182,7 +184,7 @@ def review(out, tl, video, nums, per=6, tw=640):
         sheet.save(os.path.join(rdir, f"{sid}.jpg"), quality=85)
     import shutil
     shutil.rmtree(os.path.join(rdir, "_tmp"), ignore_errors=True)
-    say(f"review: {rdir}")
+    say(f"自查图：{rdir}")
     if problems:
         raise RuntimeError("自查没通过（review 图已生成，可以打开看）：\n  " + "\n  ".join(problems))
 

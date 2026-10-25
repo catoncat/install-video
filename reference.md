@@ -5,12 +5,14 @@
 ```
 <产品>/
   model.py      必需：build() 建模
-  shots.py      必需：SHOTS 分镜；VERSIONS / LANG / MAX_WORDS / TEXT / MUSIC / STYLE / FIT / FORMATS 和 prepare() 可选
+  shots.py      必需：SHOTS 分镜；VERSIONS / LANG / MAX_WORDS / TEXT / MUSIC / STYLE / FIT 和 prepare() 可选
   music.mp3     可选：指定背景音乐，不放就用程序合成
   photos/       可选：应用场景照片（photo() 用）
-  out/<版本>/   自动生成，每条片子一个目录（如 main / detail / ad）：frames/ overlay/ review/ timeline.json log.txt text.md
-                <档位>_<版本>[_<shots>].mp4（如 preview_ad.mp4、final_main_03b.mp4，小样不会覆盖全片）
-                （老写法 FORMATS 时是 out/<画幅>/<档位>_<画幅>[_<版本>].mp4）
+  out/<版本>/   自动生成，每条片子一个目录（如 main / detail / ad）：
+                <档位>[_<shots>].mp4（如 preview.mp4、final_03b.mp4，小样不会覆盖全片）
+                plate_<同名>.mp4 / .json：无字幕底片，video compose 用它重新合成
+                review/ timeline.json log.txt text.md music.wav
+                渲染中的 frames/ overlay/ 在合成成功后自动删除（--keep-frames 保留）
 ```
 两个文件都是普通 Python。积木不够用时，直接写 bpy 代码。
 
@@ -77,7 +79,7 @@ VERSIONS = {
 }
 ```
 `shots` 是 shot id 前缀列表，**按列表顺序**拼（可以重排；一个前缀匹配多个 shot 时按原顺序），`None` 表示"没写 `only` 或 `only` 含本版本"的全部 shot。只给某些版本用的镜头写 `shot(..., only=["ad"])`。重排或跳过之后，接在"不是原来前一个 shot"后面的镜头，开头的显隐和姿态（含 `set_pose` 的折叠状态、吊在空中等）会自动按完整顺序里的样子摆好（摘要里会提示）；自定义函数做的事不在此列。每条片子单独渲染、单独出自查图和时长 / 占比检查；画幅和镜头完全一样的两条只渲一次。`--version ad` 只做一条。
-老写法（不写 `format`）：`FORMATS = [...]` 按画幅渲染全片，`VERSIONS = {"30s": [...]}` 从同一批帧剪版本，照样可用（说明版示例 kpx2 用的就是它）。
+不写 `VERSIONS` 时只有一条片子 `main`（全部镜头，16:9），说明版示例 kpx2 就是这样。`format` 不写时默认 16:9（旧写法的 `FORMATS[0]` 也认）。
 `FIT = {"9:16": dict(boost=1.35, max_w=0.92, max_h=0.60), "1:1": dict(boost=1.15, max_w=0.92, max_h=0.80)}`：方屏 / 竖屏按主体构图的参数。先量主体在分镜写的 16:9 机位里占画面多宽，换画幅时沿同一视线推近或拉远，让宽度占比放大 `boost` 倍，但不超过画面宽度的 `max_w`，高度不超过 `max_h`（给顶部标题、底部字幕留位置），不会裁到主体。16:9 里本来就是裁切的特写不动。量不到主体时退回 `FORMAT_ZOOM`（固定推近倍数）。
 `MODULE_MAX = {"options": 0.2}`：各段时长占比上限，超过就警告（默认定制选项 ≤ 20%）。
 `MAX_WORDS = 8`：每屏（同时可见的标题 + 字幕 + 标注）英文单词上限，默认 8；`None` 不检查。出片和 `video text` 都会标出超过的那几屏。

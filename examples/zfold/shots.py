@@ -33,17 +33,6 @@ FOLDED = m.FOLD_DEG
 PANELS = ["endL_panel", "endR_panel", "wallF_panel", "wallR_panel"]     # 外墙板（门窗是单独的对象，不跟着换）
 
 
-def hide_copies(prefixes=("stack_", "camp_")):
-    """把自定义 copies 留下的复制品整片隐藏（版本里没有用到它们的镜头时，完整顺序残留的关键帧会让它们冒出来）"""
-    def fn(ctx):
-        import bpy
-        for e in bpy.data.objects:
-            if e.instance_type == "COLLECTION" and e.name.startswith(prefixes):
-                e.animation_data_clear()
-                e.hide_render = e.hide_viewport = True
-    return fn
-
-
 def prepare():
     """定制选项：同一箱体换外墙饰面。只做展示，不代表全部常备"""
     geo.variant(PANELS, "stone", library.material("flexible_stone"))
@@ -284,7 +273,7 @@ SHOTS = [
     # ---------- 广告专属：钩子在前（吊起屋顶、端墙立起），近景快切 ----------
     shot("ad_hook", 4, module="install", only=["ad"], show=["@01_foundation"] + UNIT + ["@20_rig", "@21_rig_top"],
          cam=cam((0, 0, 1.0), az=(-36, -24), el=(14, 18), dist=(10.5, 9.5)),
-         do=[hide_copies(), hold(*S_FOLDED), unfold(0.2, 3.4), highlight(["@04_end_L", "@04_end_R"], 0.4, 3.0)],
+         do=[hold(*S_FOLDED), unfold(0.2, 3.4), highlight(["@04_end_L", "@04_end_R"], 0.4, 3.0)],
          notes=[note(0.5, 3.3, "吊起屋顶，整箱展开", "Lift the roof, it unfolds")]),
     shot("ad_walls", 2.2, module="install", only=["ad"], show=FULL,
          cam=cam(CENTER, az=(-25, -18), el=(34, 28), dist=11),

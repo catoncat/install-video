@@ -210,6 +210,9 @@ class Ctx:
                 [(1, False), (self.f(frm), True), (self.f(self.dur if to is None else to), False)])
 
 
+_BASE = None
+
+
 class Timeline:
     def __init__(self, fmt="16:9", zoom=None, base_dir="", fit=None):
         self.fmt = fmt
@@ -268,8 +271,11 @@ class Timeline:
         for ob in scene_camera():
             ob.animation_data_clear()
         bpy.data.objects["CAM"].data.animation_data_clear()
-        for ob in [o for o in bpy.data.objects if o.get("copies") or o.get("photo")]:      # 上次建的副本、照片
-            bpy.data.objects.remove(ob, do_unlink=True)
+        global _BASE
+        if _BASE is None:                         # 第一次建时间线之前已有的对象（模型、灯光、相机）
+            _BASE = {o.name for o in bpy.data.objects}
+        for ob in [o for o in bpy.data.objects if o.get("copies") or o.get("photo") or o.name not in _BASE]:
+            bpy.data.objects.remove(ob, do_unlink=True)   # 上次建时间线时生成的对象（副本、照片、自定义函数建的），带着旧关键帧，删掉重建
         for c in [c for c in bpy.data.collections if c.name.startswith("COPIES_")]:
             bpy.data.collections.remove(c)
         for o in objs:

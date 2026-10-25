@@ -32,7 +32,7 @@ def sheet(folder, per=16, cols=4, w=420, h=330, out=None):
         path = os.path.join(out, f"sheet_{p // per + 1:02d}.jpg")
         img.save(path, quality=82)
         paths.append(path)
-    print(f"{len(files)} images -> {out}")
+    print(f"总览图：{len(files)} 张图片 → {out}")
     return paths
 
 
@@ -98,7 +98,7 @@ def pdf(path, scale=2.0):
                 n_img += 1
     with open(os.path.join(out, "text.txt"), "w", encoding="utf-8") as fh:
         fh.write("\n\n".join(texts))
-    print(f"{len(doc)} pages, {n_img} images, text.txt -> {out}")
+    print(f"PDF：{len(doc)} 页，内嵌图片 {n_img} 张，全文 text.txt → {out}")
     return sheet(out, per=16)
 
 
@@ -166,7 +166,7 @@ def swatch(product=None, size=400):
         sheet.paste(t, ((i % cols) * size, (i // cols) * (size + 54)))
     path = os.path.join(os.path.dirname(tmp), "swatch.jpg")
     sheet.save(path, quality=88)
-    print(f"swatch: {len(tiles)} 种材质 -> {path}")
+    print(f"色卡：{len(tiles)} 种材质 → {path}")
     return path
 
 
@@ -225,7 +225,7 @@ def check(product, frames=None, every=6):
                     hits.setdefault(key, []).append(fr)
     shot_of = lambda fr: next((s["id"] for s, a, b in tl.shots if a <= fr < b), "?")
     if not hits:
-        print(f"check: {len(frames)} 帧，没有发现穿模")
+        print(f"穿模检查：{len(frames)} 帧，没有发现穿模")
         return []
     stage = {o.name: o.get("stage", "?") for o in objs}
     groups = {}
@@ -233,7 +233,7 @@ def check(product, frames=None, every=6):
         g = groups.setdefault(tuple(sorted((stage[a], stage[b]))), dict(pairs=[], frames=[]))
         g["pairs"].append((a, b))
         g["frames"] += frs
-    print(f"check: {len(frames)} 帧里发现 {len(hits)} 对零件相交，按 stage 归成 {len(groups)} 组（只查不在静止位置的零件）：")
+    print(f"穿模检查：{len(frames)} 帧里发现 {len(hits)} 对零件相交，按 stage 归成 {len(groups)} 组（只查不在静止位置的零件）：")
     for (sa, sb), g in sorted(groups.items(), key=lambda kv: min(kv[1]["frames"])):
         f0, f1 = min(g["frames"]), max(g["frames"])
         eg = "、".join(f"{a} × {b}" for a, b in g["pairs"][:2])
@@ -252,12 +252,14 @@ def zfight(frames, objs=None, tol=0.0015, min_area=4e-4):
     objs = objs or [o for o in anim.model_objects() if o.type == "MESH"]
     found = {}
     for fr in frames:
+        sc.frame_set(fr + 2)
+        later = {o.name: o.matrix_world.copy() for o in objs}
         sc.frame_set(fr)
         dg = bpy.context.evaluated_depsgraph_get()
         buckets = defaultdict(list)
         for o in objs:
-            if o.hide_render:
-                continue
+            if o.hide_render or o.matrix_world != later[o.name]:
+                continue                       # 正在动的零件只是一闪而过地穿过别的面，不算共面闪烁
             me = o.evaluated_get(dg).data
             mw = o.matrix_world
             nm = mw.to_3x3().inverted_safe().transposed()
@@ -274,7 +276,8 @@ def zfight(frames, objs=None, tol=0.0015, min_area=4e-4):
                 continue
             for i in range(len(faces)):
                 oa, n, pa = faces[i]
-                u = (pa[1] - pa[0]).normalized()
+                ax = min((Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))), key=lambda e: abs(n.dot(e)))
+                u = n.cross(ax).normalized()          # 平面内取和坐标轴对齐的两个方向：贴边相接的面不会被误判为重叠
                 v = n.cross(u)
                 ra = [(q.dot(u), q.dot(v)) for q in pa]
                 for j in range(i + 1, len(faces)):

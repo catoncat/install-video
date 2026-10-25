@@ -21,7 +21,7 @@
    - macOS / Linux：`./video.sh setup`
 
    没有 Blender 时会自动安装：Windows 用 winget，macOS 用 Homebrew，Linux 用 snap。Windows 安装时系统会弹出权限确认，提前告诉用户点"是"。
-   - `setup` 最后会用示例渲染一个镜头做自检，大约半分钟。**成功的标志：最后一行是 `SETUP OK`**；是 `SETUP FAILED` 就把整段输出给用户看。
+   - `setup` 最后会用示例渲染一个镜头做自检，大约一分钟。**成功的标志：最后一行以 `SETUP OK` 开头**；是 `SETUP FAILED` 就把整段输出给用户看。
    - winget 不可用（老版本 Windows 10）时，请用户从 https://www.blender.org/download/ 下载 Blender 4.4 以上的版本（选 LTS），装完再运行一次 `setup`。Blender 装在非默认位置时，设置环境变量 `BLENDER=<blender 可执行文件路径>`。
    - pip 下载太慢或失败时，设置国内镜像再重试：`PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`。
    - `setup` 输出里列出了字幕要用的中文和英文字体。如果报找不到字体，把报错原样告诉用户。
@@ -30,12 +30,12 @@
 
 运行示例：`video make kpx2 preview 05a`（Windows 用 `.\video.cmd`，macOS / Linux 用 `./video.sh`）。
 
-然后**打开并查看** `examples/kpx2/out/16x9/review/05a_post.jpg`，检查三点：
+然后**打开并查看** `examples/kpx2/out/main/review/05a_post.jpg`，检查三点：
 - 6 张小图各不相同，能看到角柱落下、螺栓拧入的过程；
 - 左上角有步骤标题，底部有中英双语字幕；
 - 画面完整，没有被放大裁切，也不是全黑。
 
-再把 `examples/kpx2/out/16x9/preview_16x9_05a.mp4` 的位置告诉用户，请用户自己打开看一下。有任何一项不对，就停下来，把情况告诉用户。
+再把 `examples/kpx2/out/main/preview_05a.mp4` 的位置告诉用户，请用户自己打开看一下。有任何一项不对，就停下来，把情况告诉用户。
 
 ## 3. 工作目录
 

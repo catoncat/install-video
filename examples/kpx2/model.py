@@ -131,11 +131,11 @@ def floor_frame():
     for k in range(n):
         x = -LONG_SPAN / 2 + LONG_SPAN * (k + 0.5) / n
         box(f"floor_joist_{k}", (w, W - 2 * BEAM_F, h), (x, 0, FH - T - h / 2), M["frame"], st)
-    channels(st, FH - 0.0015, up=True)
+    channels(st, FH + 0.0005, up=True)             # 槽底比梁面高 0.5 mm，槽内底面比梁面高 2 mm：避免共面闪烁
 
 def floor_deck():
     st = "03_floor_deck"
-    ix, iy = L / 2 - WALL_OFF - WALL_T, W / 2 - WALL_OFF - WALL_T
+    ix, iy = L / 2 - WALL_OFF - WALL_T - 0.003, W / 2 - WALL_OFF - WALL_T - 0.003   # 离墙槽内壁留 3 mm，不共面
     nx, ny = PX - WALL_OFF - WALL_T, PY - WALL_OFF - WALL_T   # 角柱占掉的缺口
     n = 5
     bw = 2 * ix / n
@@ -191,7 +191,7 @@ def roof_frame():
     ph, pf, n = PURLIN
     for k in range(n):
         x = -LONG_SPAN / 2 + LONG_SPAN * (k + 0.5) / n
-        profile(f"roof_purlin_{k}", c_pts(ph, pf, 0.002, -1), W - 2 * BEAM_F, "Y", (x - pf / 2, 0, H - 0.04 - ph),
+        profile(f"roof_purlin_{k}", c_pts(ph, pf, 0.002, -1), W - 2 * BEAM_F - 0.006, "Y", (x - pf / 2, 0, H - 0.043 - ph),
                 M["frame"], st)
     # 屋面板：360° 咬口，肋沿宽度方向
     ix, iy = L / 2 - BEAM_F, W / 2 - BEAM_F
@@ -202,9 +202,9 @@ def roof_frame():
     box("roof_insulation", (2 * ix, 2 * iy, 0.05), (0, 0, ROOF_BOT + 0.045), M["wool"], st)   # 吊顶之上
     # 831 吊顶板（推定在主梁下翼缘高度）
     cx, cy = L / 2 - WALL_OFF - WALL_T, W / 2 - WALL_OFF - WALL_T
-    zc = ROOF_BOT + 0.005
+    zc = ROOF_BOT + 0.009                      # 吊顶比主梁下翼缘高几毫米，不共面
     boxes("ceiling_831", [((2 * cx, 2 * cy, 0.0005), (0, 0, zc))] +
-          [((0.02, 2 * cy, 0.008), (-cx + 0.277 * k, 0, zc - 0.004)) for k in range(int(2 * cx / 0.277) + 1)],
+          [((0.02, 2 * cy, 0.004), (-cx + 0.277 * k, 0, zc - 0.002)) for k in range(int(2 * cx / 0.277) + 1)],
           M["ceiling"], st)
     # LED 灯 ×2，随顶框出厂预装
     for k, x in enumerate((-L / 4, L / 4)):
@@ -218,7 +218,7 @@ def roof_frame():
         ob.location = (x, 0, ROOF_BOT - 0.06)
         ob["stage"] = "10_services"   # 接电之后才亮；打包、吊装时不该照亮夹层
         coll("10_services").objects.link(ob)
-    channels(st, ROOF_BOT + 0.0015, up=False)
+    channels(st, ROOF_BOT - 0.001, up=False)
 
 def channels(stage, z, up):
     """墙板 U 形槽：底槽开口朝上，顶槽开口朝下"""
@@ -241,7 +241,7 @@ def walls():
     wall_run("right", END, "Y", xc, 1, -SHORT_SPAN / 2)
 
 def wall_run(prefix, layout, axis, fixed, ns, start):
-    z0, z1 = FH, ROOF_BOT
+    z0, z1 = FH + 0.003, ROOF_BOT - 0.004     # 墙板悬在槽里，上下端面不和槽底共面
     gap = 0.003
     def P(u, v, du, dv, dd=WALL_T, off=0.0):
         n = fixed + ns * off
@@ -305,7 +305,7 @@ def trim():
     hh, zc = RH + 0.02, ROOF_BOT + RH / 2 + 0.01
     boxes("roof_wrap", [((L + 2 * t, t, hh), (0, -W / 2 - t / 2, zc)), ((L + 2 * t, t, hh), (0, W / 2 + t / 2, zc)),
                         ((t, W, hh), (-L / 2 - t / 2, 0, zc)), ((t, W, hh), (L / 2 + t / 2, 0, zc))], M["frame"], st)
-    ix, iy = L / 2 - WALL_OFF - WALL_T, W / 2 - WALL_OFF - WALL_T
+    ix, iy = L / 2 - WALL_OFF - WALL_T - 0.003, W / 2 - WALL_OFF - WALL_T - 0.003
     z = FLOOR_TOP + 0.04
     boxes("skirting", [((2 * ix, 0.012, 0.08), (0, -iy + 0.006, z)), ((2 * ix, 0.012, 0.08), (0, iy - 0.006, z)),
                        ((0.012, 2 * iy, 0.08), (-ix + 0.006, 0, z)), ((0.012, 2 * iy, 0.08), (ix - 0.006, 0, z))],
@@ -359,7 +359,7 @@ def guides():
     d = math.hypot(L, W)
     ang = math.atan2(W, L)
     for k, s in enumerate((1, -1)):
-        ob = box(f"diag_{k}", (d - 0.3, 0.025, 0.025), (0, 0, FH + 0.03), M["guide"], st)
+        ob = box(f"diag_{k}", (d - 0.3, 0.025, 0.025), (0, 0, FH + 0.03 + 0.004 * k), M["guide"], st)   # 两条交叉处错开高度
         ob.rotation_euler.z = s * ang
 
 def bundle():
